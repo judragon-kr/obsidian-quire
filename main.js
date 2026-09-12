@@ -19,7 +19,7 @@
  * 좌표는 화면이 아니라 **월드 좌표**로 둔다 — 확대·이동해도 획이 안 흔들린다.
  */
 
-const { ItemView, TextFileView, Plugin, Notice, Menu } = require('obsidian');
+const { TextFileView, Plugin, Notice } = require('obsidian');
 
 const VIEW_TYPE = 'quire';
 const EXT = 'quire';
@@ -140,6 +140,12 @@ class QuireView extends TextFileView {
   getViewData() { return JSON.stringify(this.doc); }
 
   setViewData(data, clear) {
+    // 파일마다 새로 판정한다. 안 지우면 깨진 파일 하나 연 뒤로
+    // 같은 탭에서 여는 모든 파일이 조용히 저장을 안 한다.
+    this.readonly = false;
+    // 이력은 파일 경계에서 끊는다. 안 끊으면 undo 가 앞 파일의 획을
+    // 지금 파일에 밀어 넣는다.
+    this.resetHistory();
     try {
       const d = data && data.trim() ? JSON.parse(data) : DEFAULT();
       this.doc = d && Array.isArray(d.strokes) ? d : DEFAULT();
@@ -154,7 +160,13 @@ class QuireView extends TextFileView {
     this.resize();
   }
 
-  clear() { this.doc = DEFAULT(); this.needBake = true; }
+  clear() { this.doc = DEFAULT(); this.needBake = true; this.resetHistory(); }
+
+  resetHistory() {
+    this.undoStack = [];
+    this.redoStack = [];
+    if (this.penBtn) this.refreshBar();
+  }
 
   // ── 화면 ────────────────────────────────────────────────
   async onOpen() {
@@ -187,12 +199,7 @@ class QuireView extends TextFileView {
     this.live.addEventListener('touchend', this.tEnd, { passive: false });
     this.live.addEventListener('touchcancel', this.tEnd, { passive: false });
 
-    this.winDown = (e) => {
-      const r = this.live.getBoundingClientRect();
-      if (e.clientX < r.left || e.clientX > r.right ||
-          e.clientY < r.top || e.clientY > r.bottom) return;
-      this.onDown(e);
-    };
+    this.winDown = (e) => { if (this.inCanvas(e)) this.onDown(e); };
     window.addEventListener('pointerdown', this.winDown, { passive: false });
     // move/up 은 **window** 에 건다. 손이 닿아 있으면 iPadOS 가 캡처를 뺏어 가서
     // 캔버스에만 걸면 획 중간에 이벤트가 끊긴다.
@@ -230,13 +237,13 @@ class QuireView extends TextFileView {
       if (key) b.dataset.tool = key;
       return b;
     };
-    this.penBtn = btn('\u270f\ufe0f', 'Pen', () => this.setTool('pen'), 'pen');
-    this.hlBtn = btn('\U0001f58d', 'Highlighter', () => this.setTool('hl'), 'hl');
-    this.erBtn = btn('\U0001fa79', 'Eraser (whole stroke)', () => this.setTool('er'), 'er');
+    this.penBtn = btn('✏️', 'Pen', () => this.setTool('pen'), 'pen');
+    this.hlBtn = btn('🖍', 'Highlighter', () => this.setTool('hl'), 'hl');
+    this.erBtn = btn('🩹', 'Eraser (whole stroke)', () => this.setTool('er'), 'er');
 
     bar.createSpan({ cls: 'quire-sep' });
-    this.undoBtn = btn('\u21a9\ufe0e', 'Undo', () => this.undo());
-    this.redoBtn = btn('\u21aa\ufe0e', 'Redo', () => this.redo());
+    this.undoBtn = btn('↩︎', 'Undo', () => this.undo());
+    this.redoBtn = btn('↪︎', 'Redo', () => this.redo());
 
     // ── 굵기 ── 점 크기가 실제 굵기에 비례한다. 숫자보다 이게 빠르다.
     bar.createSpan({ cls: 'quire-sep' });
@@ -263,17 +270,17 @@ class QuireView extends TextFileView {
     }
     // 임의 색. label 로 감싸야 iPadOS 에서 색 선택기가 뜬다.
     this.customSw = bar.createEl('label', { cls: 'quire-sw quire-sw-custom', attr: { 'aria-label': 'Custom colour', title: 'Custom colour' } });
-    const ci = this.customSw.createEl('input', { type: 'color' });
+    const ci = this.customInput = this.customSw.createEl('input', { type: 'color' });
     ci.value = this.color;
     ci.oninput = () => this.setColor(ci.value);
 
     // ── 필압 ──
     bar.createSpan({ cls: 'quire-sep' });
-    this.prBtn = btn('\u25d0', 'Pressure sensitivity', () => this.setPressure(!this.pressure));
+    this.prBtn = btn('◐', 'Pressure sensitivity', () => this.setPressure(!this.pressure));
 
     bar.createSpan({ cls: 'quire-sep' });
-    btn('\u2299', 'Fit to content', () => this.fit());
-    btn('\U0001f41e', 'Toggle input diagnostics', () => {
+    btn('⊙', 'Fit to content', () => this.fit());
+    btn('🐞', 'Toggle input diagnostics', () => {
       this.dbg = !this.dbg;
       this.dbgEl.style.display = this.dbg ? 'block' : 'none';
       this.paintDbg();
@@ -286,6 +293,12 @@ class QuireView extends TextFileView {
 
   // 필압을 굵기에 얼마나 반영할지. 끄면 1(고정 굵기), 형광펜은 항상 고정.
   // 마우스는 pressure 를 0 으로 주므로 0.5 로 받는다.
+  inCanvas(e) {
+    const r = this.live.getBoundingClientRect();
+    return e.clientX >= r.left && e.clientX <= r.right &&
+           e.clientY >= r.top && e.clientY <= r.bottom;
+  }
+
   prOf(raw) {
     if (!this.pressure || this.tool === 'hl') return 1;
     return raw > 0 ? Math.min(1, raw) : 0.5;
@@ -352,7 +365,7 @@ class QuireView extends TextFileView {
 
   setColor(c) {
     this.color = c;
-    if (this.tool === 'er') this.tool = 'pen';
+    if (this.tool === 'er') { this.tool = 'pen'; this.plugin.settings.tool = 'pen'; }
     this.plugin.settings.color = c;
     this.plugin.queueSave();
     this.refreshBar();
@@ -389,6 +402,7 @@ class QuireView extends TextFileView {
     this.undoBtn.toggleClass('is-off', this.undoStack.length === 0);
     this.redoBtn.toggleClass('is-off', this.redoStack.length === 0);
     this.customSw.style.background = this.color;
+    this.customInput.value = this.color;
   }
 
   resize() {
@@ -505,6 +519,9 @@ class QuireView extends TextFileView {
       return;
     }
 
+    // 오른쪽·가운데 클릭은 획이 아니다. 마우스에만 걸어 스타일러스 배럴 버튼은 안 건드린다.
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+
     // 펜·마우스는 손가락이 몇 개 닿아 있든 항상 그린다.
     this.touches.clear();
     this.pinch = null;
@@ -538,7 +555,7 @@ class QuireView extends TextFileView {
 
     // **자가 복구.** 취소가 끼어들어 획이 끊겨도, 펜이 아직 닿아 있으면(buttons≠0)
     // 여기서 다시 시작한다. 「둘째 획부터 안 그려짐」이 이 자리였다.
-    if (!this.cur && e.buttons !== 0 && this.tool !== 'er') {
+    if (!this.cur && e.buttons !== 0 && this.tool !== 'er' && this.inCanvas(e)) {
       const [sx, sy] = this.toWorld(e.clientX, e.clientY);
       this.cur = this.newStroke(sx, sy, this.prOf(e.pressure));
       this.recovered = (this.recovered || 0) + 1;
@@ -759,6 +776,15 @@ class QuireView extends TextFileView {
       const s = this.doc.strokes[i], b = s.bb;
       if (b && (x < b[0] - R || x > b[2] + R || y < b[1] - R || y > b[3] + R)) continue;
       const p = s.pts;
+      // 점 하나짜리 획(탭 한 번)은 구간이 없어 아래 루프를 안 탄다
+      if (p.length === 3) {
+        const dx = x - p[0], dy = y - p[1];
+        if (Math.sqrt(dx * dx + dy * dy) <= R + s.w) {
+          this.doc.strokes.splice(i, 1);
+          hit = true;
+        }
+        continue;
+      }
       for (let j = 3; j + 2 < p.length; j += 3) {
         if (segDist(x, y, p[j - 3], p[j - 2], p[j], p[j + 1]) <= R + s.w) {
           this.doc.strokes.splice(i, 1);
@@ -768,14 +794,6 @@ class QuireView extends TextFileView {
       }
     }
     if (hit) { this.needBake = true; this.schedule(); }
-  }
-
-  undo() {
-    if (!this.doc.strokes.length) return;
-    this.doc.strokes.pop();
-    this.needBake = true;
-    this.schedule();
-    this.commitDoc();
   }
 
   fit() {

@@ -34,8 +34,11 @@ desktop.
 - Pressure-driven stroke width
 - Colour and width presets
 - Palm rejection — finger input is ignored while the pen is in contact
+- Pen, highlighter and stroke-level eraser; four stroke widths; pressure on/off
+- Undo and redo, 60 steps deep, covering erases as well as strokes
+- Five colour presets plus a custom colour picker
 - Fit to content
-- Remove last stroke
+- Tool, colour, width and the pressure setting persist across restarts
 - Viewport culling — off-screen strokes are skipped when the committed layer is rebuilt
 - An input diagnostics overlay (the 🐞 button) showing event counts and a timestamped
   event trace, for reporting stylus problems on hardware I cannot test
@@ -44,12 +47,13 @@ desktop.
 
 Stated plainly so nobody is surprised:
 
-- **No real undo.** The ↩︎ button removes the most recent stroke. It does not restore
-  erased strokes and there is no redo
 - No stroke selection or move
 - No PDF or image background
 - No text
-- Tested on iPadOS and macOS. Windows, Linux and Android are untested
+- No layers
+- Tested on iPadOS and macOS. Windows, Linux and Android are untested. Palm rejection
+  keys off `Touch.touchType === 'stylus'`, which is what Apple Pencil reports; other
+  styluses are unverified
 
 ## File format
 
@@ -77,11 +81,15 @@ Not in the community plugin list yet.
 Working from a clone: edit in the repo and run `./sync.sh` to copy the three files into
 your vault. Set `QUIRE_VAULT` if your vault is not at the default iCloud path.
 
+`npm test` runs `test/smoke.js`, which loads the plugin against a stubbed Obsidian API and
+asserts the input, undo and persistence behaviour. It catches duplicate method definitions,
+bad string escapes and state leaking across files — the three things that got past a
+careful read of the diff.
+
 ## Prior art
 
 [Pencil](https://github.com/rcanand/obsidian-pencil) by rcanand covers the same ground and
-has features Quire does not — a real undo stack, stroke selection and move. Quire shares no
-code with it. If you want the fuller feature set today, use Pencil.
+has features Quire does not — stroke selection and move. Quire shares no code with it. If you want the fuller feature set today, use Pencil.
 
 ## Licence
 

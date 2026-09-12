@@ -1,0 +1,10 @@
+{
+  "name": "obsidian-quire",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Infinite handwriting whiteboard for Obsidian",
+  "scripts": {
+    "test": "node test/smoke.js"
+  },
+  "license": "MIT"
+}
