@@ -157,6 +157,24 @@ const p = new Quire();
   v.cur = { c:'#000', w:2, a:1, pts:[100,100,1, 110,110,1] }; v.commitStroke();
   ok(v.contentBB()[2] >= 110, '획을 더하면 캐시가 버려지고 다시 잰다');
 
+  // ── touchType 을 안 주는 하드웨어에서 Pointer 경로가 살아 있나 ──
+  const T = (type, x, y) => ({ identifier: 1, touchType: type, clientX: x, clientY: y, force: 0.5 });
+  const ev = (chg, all) => ({ changedTouches: chg, touches: all, preventDefault(){} });
+
+  v.useTouch = false; v.cur = null; v.doc.strokes = [];
+  v.onTouch(ev([T(undefined, 10, 10)], [T(undefined, 10, 10)]), 'start');   // 안드로이드/윈도우 펜
+  ok(v.useTouch === false, 'touchType 이 없으면 Touch 경로를 안 켠다');
+  v.onDown({ pointerType:'pen', button:0, buttons:1, clientX:10, clientY:10, pressure:0.5, preventDefault(){} });
+  ok(v.cur !== null, '그 경우 Pointer 경로가 펜을 받아 획을 시작한다');
+
+  v.cur = null; v.useTouch = false;
+  v.onTouch(ev([T('stylus', 10, 10)], [T('stylus', 10, 10)]), 'start');     // 애플 펜슬
+  ok(v.useTouch === true, 'stylus 를 보면 Touch 경로를 켠다');
+  ok(v.cur !== null, '그 자리에서 획이 시작된다');
+  v.onDown({ pointerType:'pen', button:0, buttons:1, clientX:99, clientY:99, pressure:0.5, preventDefault(){} });
+  ok(v.cur.pts[0] === 10, 'Touch 경로가 켜지면 Pointer 쪽 펜은 무시된다');
+  v.cur = null; v.useTouch = false;
+
   console.log(fail.length ? `\n✗ 실패 ${fail.length}건` : '\n○ 전부 통과');
   process.exit(fail.length ? 1 : 0);
 })().catch(e => { console.error('터짐:', e); process.exit(2); });

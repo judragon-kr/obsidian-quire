@@ -826,10 +826,18 @@ class QuireView extends TextFileView {
   // WebKit 이 「제스처인가」를 판별하느라 붙들기 때문이다. TouchEvent 는 그 단계를
   // 안 거치고, Touch.touchType 으로 펜/손가락이 바로 갈린다.
   onTouch = (e, kind) => {
-    this.useTouch = true;
     const pen = [], fin = [];
     for (const t of e.changedTouches) {
       (t.touchType === 'stylus' ? pen : fin).push(t);
+    }
+
+    // **stylus 를 실제로 본 뒤에만 이 경로를 켠다.**
+    // touchType 은 애플이 채워 준다. 안 채우는 하드웨어에서 무조건 켜면
+    // 펜이 손가락으로 분류돼 그려지는 대신 화면이 밀린다.
+    // 안 켜면 Pointer 경로가 그대로 맡고, 거기서는 pointerType === 'pen' 으로 갈린다.
+    if (!this.useTouch) {
+      if (!pen.length) return;
+      this.useTouch = true;
     }
     // 지금 화면에 닿아 있는 펜이 있나 (changed 가 아니라 전체)
     let penLive = false;

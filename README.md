@@ -60,9 +60,21 @@ Stated plainly so nobody is surprised:
 - No PDF or image background
 - No text
 - No layers
-- Tested on iPadOS and macOS. Windows, Linux and Android are untested. Palm rejection
-  keys off `Touch.touchType === 'stylus'`, which is what Apple Pencil reports; other
-  styluses are unverified
+
+## Hardware
+
+Built and tested on **iPadOS with Apple Pencil**, and on **macOS with a mouse**. That is
+what I have, and it is what I intend to support.
+
+The palm-rejection path keys off `Touch.touchType === 'stylus'`, which Apple populates.
+It only activates once a stylus touch has actually been seen, so hardware that does not
+report `touchType` — Windows, Android, most non-Apple styluses — stays on the standard
+Pointer Events path, where pens are identified by `pointerType === 'pen'`. Drawing and
+pressure work there; what you do not get is the touch-layer palm rejection, so resting
+your hand may pan the canvas.
+
+I cannot test those setups and will not be fixing bugs I cannot reproduce. Reports with
+the 🐞 diagnostics output are still welcome, and so are pull requests.
 
 ## File format
 
