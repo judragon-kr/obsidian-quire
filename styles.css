@@ -1,0 +1,30 @@
+/* touch-action 을 루트까지 내린다.
+   live 캔버스에만 걸면, 손바닥이 그 밖에 닿았을 때 바깥 요소의 스크롤 제스처
+   인식기가 살아 있고 뒤따르는 펜 접촉이 그 판정이 끝날 때까지 붙들린다.
+   -webkit-touch-callout / user-select 는 길게 눌렀을 때 뜨는 팝업을 막는다. */
+.quire-root, .quire-wrap, .quire-c {
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+.quire-root { padding: 0; height: 100%; display: flex; flex-direction: column;
+  overscroll-behavior: none; }
+.quire-wrap { position: relative; flex: 1 1 auto; overflow: hidden;
+  background: var(--background-primary); }
+.quire-c { position: absolute; inset: 0; display: block; }
+.quire-bar { flex: 0 0 auto; display: flex; align-items: center; gap: 6px;
+  padding: 6px 10px; border-top: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary); }
+.quire-bar button { min-width: 34px; height: 30px; font-size: 15px;
+  border-radius: 6px; cursor: pointer; }
+.quire-bar button.is-on { outline: 2px solid var(--interactive-accent); }
+.quire-sw { width: 20px; height: 20px; border-radius: 50%; cursor: pointer;
+  border: 1px solid var(--background-modifier-border); }
+.quire-sep { width: 1px; height: 20px; background: var(--background-modifier-border);
+  margin: 0 4px; }
+.quire-dbg { position: absolute; top: 8px; left: 8px; z-index: 5;
+  font: 11px/1.5 var(--font-monospace); white-space: pre; pointer-events: none;
+  background: var(--background-secondary); color: var(--text-normal);
+  border: 1px solid var(--background-modifier-border); border-radius: 6px;
+  padding: 6px 8px; opacity: .92; }

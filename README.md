@@ -1,0 +1,88 @@
+# Quire
+
+An infinite handwriting whiteboard for [Obsidian](https://obsidian.md). Each board is a
+`.quire` file in your vault. No account, no server, no network access.
+
+A *quire* is a gathering of sheets — the unit a notebook is bound from.
+
+## Why another one
+
+Quire is built around three things that decide whether a stylus feels right on a canvas.
+
+**Strokes are baked, not redrawn.** Two stacked canvases: finished strokes are drawn once
+onto the committed layer, and only the stroke under the pen is redrawn each frame. The
+committed layer is rebuilt only when the view pans or zooms. Per-frame cost does not grow
+with the number of strokes already on the board.
+
+**Every sample is used.** Apple Pencil reports at up to 240 Hz while `pointermove` fires at
+the display rate. Quire reads `getCoalescedEvents()` for the samples in between and
+`getPredictedEvents()` to draw slightly ahead of the pen, and requests a
+`desynchronized` 2D context for a shorter path to the screen.
+
+**Palm and pen are separated at the touch layer.** Quire listens to `touchstart` /
+`touchmove` / `touchend` and splits input on `Touch.touchType`. This avoids a WebKit
+behaviour on iPad where, while a finger is in contact, the next pen `pointerdown` is
+delayed or withheld while the system decides whether the contact is a gesture.
+`touch-action: none` is applied down the whole view subtree, not only the canvas, so no
+enclosing element keeps a scroll recognizer armed. Pointer Events are still used on
+desktop.
+
+## What it does
+
+- Infinite canvas — two-finger pan and pinch zoom, wheel and ⌘-wheel on desktop
+- Pen, highlighter, stroke-level eraser
+- Pressure-driven stroke width
+- Colour and width presets
+- Palm rejection — finger input is ignored while the pen is in contact
+- Fit to content
+- Remove last stroke
+- Viewport culling — off-screen strokes are skipped when the committed layer is rebuilt
+- An input diagnostics overlay (the 🐞 button) showing event counts and a timestamped
+  event trace, for reporting stylus problems on hardware I cannot test
+
+## Not there yet
+
+Stated plainly so nobody is surprised:
+
+- **No real undo.** The ↩︎ button removes the most recent stroke. It does not restore
+  erased strokes and there is no redo
+- No stroke selection or move
+- No PDF or image background
+- No text
+- Tested on iPadOS and macOS. Windows, Linux and Android are untested
+
+## File format
+
+`.quire` is JSON. Points are stored flat as `[x, y, pressure, …]` in world coordinates,
+with a cached bounding box per stroke.
+
+```json
+{
+  "v": 1,
+  "strokes": [{ "c": "#e8e8e8", "w": 3, "a": 1, "pts": [0, 0, 0.5, 12, 4, 0.62] }],
+  "view": { "x": 0, "y": 0, "k": 1 }
+}
+```
+
+If a file fails to parse, the view refuses to open it rather than overwriting it.
+
+## Install
+
+Not in the community plugin list yet.
+
+1. Download `main.js`, `manifest.json` and `styles.css` from the latest release
+2. Put them in `<vault>/.obsidian/plugins/quire/`
+3. Reload Obsidian and enable **Quire** under Settings → Community plugins
+
+Working from a clone: edit in the repo and run `./sync.sh` to copy the three files into
+your vault. Set `QUIRE_VAULT` if your vault is not at the default iCloud path.
+
+## Prior art
+
+[Pencil](https://github.com/rcanand/obsidian-pencil) by rcanand covers the same ground and
+has features Quire does not — a real undo stack, stroke selection and move. Quire shares no
+code with it. If you want the fuller feature set today, use Pencil.
+
+## Licence
+
+MIT

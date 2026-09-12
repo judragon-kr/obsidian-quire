@@ -1,0 +1,10 @@
+{
+  "id": "quire",
+  "name": "Quire",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Infinite handwriting whiteboard. Two-layer canvas and coalesced pointer input keep strokes fast as the board fills up.",
+  "author": "judragon-kr",
+  "authorUrl": "https://github.com/judragon-kr/obsidian-quire",
+  "isDesktopOnly": false
+}
