@@ -13,7 +13,7 @@
 .quire-wrap { position: relative; flex: 1 1 auto; overflow: hidden;
   background: var(--background-primary); }
 .quire-c { position: absolute; inset: 0; display: block; }
-.quire-bar { flex: 0 0 auto; display: flex; align-items: center; gap: 6px;
+.quire-bar { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
   padding: 6px 10px; border-top: 1px solid var(--background-modifier-border);
   background: var(--background-secondary); }
 .quire-bar button { min-width: 34px; height: 30px; font-size: 15px;
@@ -28,3 +28,27 @@
   background: var(--background-secondary); color: var(--text-normal);
   border: 1px solid var(--background-modifier-border); border-radius: 6px;
   padding: 6px 8px; opacity: .92; }
+
+/* ── 선택 표시 ──
+   색·굵기를 눌러도 아무 표시가 없던 자리. 스와치는 바깥 링으로,
+   굵기는 배경으로 나타낸다. 링을 box-shadow 로 그리는 것은 스와치 지름을
+   건드리지 않아 옆칸이 안 밀리기 때문이다. */
+.quire-sw.is-on {
+  box-shadow: 0 0 0 2px var(--background-secondary), 0 0 0 4px var(--interactive-accent);
+}
+.quire-sw-custom { position: relative; overflow: hidden; padding: 0; }
+.quire-sw-custom input[type="color"] {
+  position: absolute; inset: -4px; width: calc(100% + 8px); height: calc(100% + 8px);
+  border: 0; padding: 0; opacity: 0; cursor: pointer;
+}
+
+.quire-w { width: 26px; height: 26px; border-radius: 6px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--background-modifier-border); }
+.quire-w.is-on { background: var(--interactive-accent);
+  border-color: var(--interactive-accent); }
+.quire-wdot { border-radius: 50%; background: var(--text-normal); }
+.quire-w.is-on .quire-wdot { background: var(--text-on-accent); }
+
+/* 되돌릴 것이 없으면 눌러도 소용없다는 것을 보여 준다 */
+.quire-bar button.is-off { opacity: .35; }

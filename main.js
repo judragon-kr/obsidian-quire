@@ -24,6 +24,8 @@ const { ItemView, TextFileView, Plugin, Notice, Menu } = require('obsidian');
 const VIEW_TYPE = 'quire';
 const EXT = 'quire';
 
+const WIDTHS = [1.2, 2.2, 4, 7];
+const PALETTE = ['#2f6de0', '#e03131', '#2f9e44', '#f08c00', '#343a40'];
 const DEFAULT = () => ({ v: 1, strokes: [], view: { x: 0, y: 0, k: 1 } });
 
 // ── 획 하나 ────────────────────────────────────────────────
@@ -44,39 +46,63 @@ function bboxOf(pts, w) {
 
 // 중점을 지나는 2차 곡선. lineTo 만 쓰면 각이 진다.
 function drawStroke(ctx, s, k) {
-  const p = s.pts;
-  if (p.length < 6) {
-    if (p.length === 3) {
-      ctx.beginPath();
-      ctx.arc(p[0], p[1], Math.max(0.35, s.w * p[2] * 0.5), 0, 6.284);
-      ctx.fillStyle = s.c;
-      ctx.fill();
-    }
-    return;
-  }
+  const p = s.pts, n = p.length / 3;
+  if (n === 0) return;
   ctx.strokeStyle = s.c;
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
   ctx.globalAlpha = s.a != null ? s.a : 1;
 
-  // 필압을 굵기로. 구간마다 굵기가 달라지므로 구간별로 그린다.
-  for (let i = 3; i + 2 < p.length; i += 3) {
-    const x0 = p[i - 3], y0 = p[i - 2];
-    const x1 = p[i], y1 = p[i + 1], pr = p[i + 2];
-    const mx = (x0 + x1) / 2, my = (y0 + y1) / 2;
+  // 화면에서 0.35px 밑으로는 안 내려간다. k 로 나누는 것은 world 단위라서다.
+  const wAt = (i) => Math.max(0.35 / k, s.w * (0.35 + 0.65 * p[i * 3 + 2]));
+
+  if (n === 1) {
     ctx.beginPath();
-    ctx.moveTo(x0, y0);
-    ctx.quadraticCurveTo(x0, y0, mx, my);
-    ctx.lineWidth = Math.max(0.35 / k, s.w * (0.35 + 0.65 * pr));
+    ctx.arc(p[0], p[1], wAt(0) * 0.5, 0, 6.284);
+    ctx.fillStyle = s.c;
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    return;
+  }
+  if (n === 2) {
+    ctx.beginPath();
+    ctx.moveTo(p[0], p[1]);
+    ctx.lineTo(p[3], p[4]);
+    ctx.lineWidth = wAt(1);
     ctx.stroke();
+    ctx.globalAlpha = 1;
+    return;
+  }
+
+  // 중점 이차곡선 — 점 i 를 제어점으로 두고 앞뒤 중점을 잇는다.
+  // 제어점을 시작점과 같게 주면 곡선이 아니라 직선이 된다.
+  // 구간마다 굵기가 달라지므로 한 구간이 한 path 다.
+  let mx = (p[0] + p[3]) / 2, my = (p[1] + p[4]) / 2;
+  ctx.beginPath();
+  ctx.moveTo(p[0], p[1]);
+  ctx.lineTo(mx, my);
+  ctx.lineWidth = wAt(1);
+  ctx.stroke();
+
+  for (let i = 1; i < n - 1; i++) {
+    const cx = p[i * 3], cy = p[i * 3 + 1];
+    const nx = (cx + p[(i + 1) * 3]) / 2, ny = (cy + p[(i + 1) * 3 + 1]) / 2;
     ctx.beginPath();
     ctx.moveTo(mx, my);
-    ctx.lineTo(x1, y1);
-    ctx.lineWidth = Math.max(0.35 / k, s.w * (0.35 + 0.65 * pr));
+    ctx.quadraticCurveTo(cx, cy, nx, ny);
+    ctx.lineWidth = wAt(i);
     ctx.stroke();
+    mx = nx; my = ny;
   }
+
+  ctx.beginPath();
+  ctx.moveTo(mx, my);
+  ctx.lineTo(p[(n - 1) * 3], p[(n - 1) * 3 + 1]);
+  ctx.lineWidth = wAt(n - 1);
+  ctx.stroke();
   ctx.globalAlpha = 1;
 }
+
 
 function segDist(px, py, ax, ay, bx, by) {
   const dx = bx - ax, dy = by - ay;
@@ -92,10 +118,13 @@ class QuireView extends TextFileView {
     super(leaf);
     this.plugin = plugin;
     this.doc = DEFAULT();
-    this.tool = 'pen';
-    this.color = '#2f6de0';
-    this.width = 2.2;
-    this.eraserR = 12;
+    const st = plugin.settings;
+    this.tool = st.tool;
+    this.color = st.color;
+    this.width = st.width;
+    this.pressure = st.pressure;
+    this.undoStack = [];
+    this.redoStack = [];
     this.cur = null;          // 그리는 중인 획
     this.needBake = true;     // base 를 다시 구워야 하나
     this.raf = 0;
@@ -196,24 +225,55 @@ class QuireView extends TextFileView {
   buildToolbar(root) {
     const bar = root.createDiv({ cls: 'quire-bar' });
     const btn = (label, title, fn, key) => {
-      const b = bar.createEl('button', { text: label, attr: { 'aria-label': title } });
+      const b = bar.createEl('button', { text: label, attr: { 'aria-label': title, title } });
       b.onclick = fn;
       if (key) b.dataset.tool = key;
       return b;
     };
-    this.penBtn = btn('✏️', 'Pen', () => this.setTool('pen'), 'pen');
-    this.hlBtn = btn('🖍', 'Highlighter', () => this.setTool('hl'), 'hl');
-    this.erBtn = btn('🩹', 'Eraser (whole stroke)', () => this.setTool('er'), 'er');
-    btn('↩︎', 'Remove last stroke', () => this.undo());
+    this.penBtn = btn('\u270f\ufe0f', 'Pen', () => this.setTool('pen'), 'pen');
+    this.hlBtn = btn('\U0001f58d', 'Highlighter', () => this.setTool('hl'), 'hl');
+    this.erBtn = btn('\U0001fa79', 'Eraser (whole stroke)', () => this.setTool('er'), 'er');
+
     bar.createSpan({ cls: 'quire-sep' });
-    for (const c of ['#2f6de0', '#e03131', '#2f9e44', '#f08c00', '#343a40']) {
-      const d = bar.createDiv({ cls: 'quire-sw' });
-      d.style.background = c;
-      d.onclick = () => { this.color = c; this.setTool(this.tool === 'er' ? 'pen' : this.tool); };
+    this.undoBtn = btn('\u21a9\ufe0e', 'Undo', () => this.undo());
+    this.redoBtn = btn('\u21aa\ufe0e', 'Redo', () => this.redo());
+
+    // ── 굵기 ── 점 크기가 실제 굵기에 비례한다. 숫자보다 이게 빠르다.
+    bar.createSpan({ cls: 'quire-sep' });
+    this.wEls = [];
+    for (const w of WIDTHS) {
+      const d = bar.createDiv({ cls: 'quire-w', attr: { 'aria-label': `Width ${w}`, title: `Width ${w}` } });
+      d.dataset.w = String(w);
+      const dot = d.createDiv({ cls: 'quire-wdot' });
+      const px = Math.min(18, 3 + w * 1.9);
+      dot.style.width = dot.style.height = `${px}px`;
+      d.onclick = () => this.setWidth(w);
+      this.wEls.push(d);
     }
+
+    // ── 색 ── 고른 것에 테두리가 생긴다
     bar.createSpan({ cls: 'quire-sep' });
-    btn('⊙', 'Fit to content', () => this.fit());
-    btn('🐞', 'Toggle input diagnostics', () => {
+    this.swEls = [];
+    for (const c of PALETTE) {
+      const d = bar.createDiv({ cls: 'quire-sw', attr: { 'aria-label': c, title: c } });
+      d.dataset.color = c;
+      d.style.background = c;
+      d.onclick = () => this.setColor(c);
+      this.swEls.push(d);
+    }
+    // 임의 색. label 로 감싸야 iPadOS 에서 색 선택기가 뜬다.
+    this.customSw = bar.createEl('label', { cls: 'quire-sw quire-sw-custom', attr: { 'aria-label': 'Custom colour', title: 'Custom colour' } });
+    const ci = this.customSw.createEl('input', { type: 'color' });
+    ci.value = this.color;
+    ci.oninput = () => this.setColor(ci.value);
+
+    // ── 필압 ──
+    bar.createSpan({ cls: 'quire-sep' });
+    this.prBtn = btn('\u25d0', 'Pressure sensitivity', () => this.setPressure(!this.pressure));
+
+    bar.createSpan({ cls: 'quire-sep' });
+    btn('\u2299', 'Fit to content', () => this.fit());
+    btn('\U0001f41e', 'Toggle input diagnostics', () => {
       this.dbg = !this.dbg;
       this.dbgEl.style.display = this.dbg ? 'block' : 'none';
       this.paintDbg();
@@ -221,14 +281,114 @@ class QuireView extends TextFileView {
     this.dbgEl = this.wrap.createDiv({ cls: 'quire-dbg' });
     this.dbgEl.style.display = 'none';
     this.counts = { pen: {}, touch: {}, mouse: {} };
-    this.setTool('pen');
+    this.refreshBar();
+  }
+
+  // 필압을 굵기에 얼마나 반영할지. 끄면 1(고정 굵기), 형광펜은 항상 고정.
+  // 마우스는 pressure 를 0 으로 주므로 0.5 로 받는다.
+  prOf(raw) {
+    if (!this.pressure || this.tool === 'hl') return 1;
+    return raw > 0 ? Math.min(1, raw) : 0.5;
+  }
+
+  newStroke(x, y, pr) {
+    const hl = this.tool === 'hl';
+    return {
+      c: this.color,
+      w: hl ? this.width * 6 : this.width,
+      a: hl ? 0.35 : 1,
+      pts: [x, y, pr],
+    };
+  }
+
+  get eraserR() { return Math.max(8, this.width * 5); }
+
+  // 그리는 중이던 획을 문서에 넣고 base 에 한 번만 굽는다. 전체 재굽기가 아니다.
+  commitStroke() {
+    if (!this.cur || this.cur.pts.length < 3) { this.cur = null; return; }
+    this.snapshot();
+    this.cur.bb = bboxOf(this.cur.pts, this.cur.w);
+    this.doc.strokes.push(this.cur);
+    this.applyXform(this.bctx);
+    drawStroke(this.bctx, this.cur, this.doc.view.k);
+    this.cur = null;
+    this.commitDoc();
+  }
+
+  // 획 배열은 확정 뒤 안 바뀌므로 얕은 복사면 된다.
+  snapshot() {
+    this.undoStack.push(this.doc.strokes.slice());
+    if (this.undoStack.length > 60) this.undoStack.shift();
+    this.redoStack.length = 0;
+    this.refreshBar();
+  }
+
+  undo() {
+    if (!this.undoStack.length) return;
+    this.redoStack.push(this.doc.strokes.slice());
+    this.doc.strokes = this.undoStack.pop();
+    this.needBake = true;
+    this.schedule();
+    this.commitDoc();
+    this.refreshBar();
+  }
+
+  redo() {
+    if (!this.redoStack.length) return;
+    this.undoStack.push(this.doc.strokes.slice());
+    this.doc.strokes = this.redoStack.pop();
+    this.needBake = true;
+    this.schedule();
+    this.commitDoc();
+    this.refreshBar();
   }
 
   setTool(t) {
     this.tool = t;
+    this.plugin.settings.tool = t;
+    this.plugin.queueSave();
+    this.refreshBar();
+  }
+
+  setColor(c) {
+    this.color = c;
+    if (this.tool === 'er') this.tool = 'pen';
+    this.plugin.settings.color = c;
+    this.plugin.queueSave();
+    this.refreshBar();
+  }
+
+  setWidth(w) {
+    this.width = w;
+    this.plugin.settings.width = w;
+    this.plugin.queueSave();
+    this.refreshBar();
+  }
+
+  setPressure(on) {
+    this.pressure = on;
+    this.plugin.settings.pressure = on;
+    this.plugin.queueSave();
+    this.refreshBar();
+  }
+
+  // 툴바의 모든 선택 표시를 한 자리에서 다시 칠한다.
+  // 색·굵기가 눌려도 아무 표시가 없던 것이 여기 없어서였다.
+  refreshBar() {
+    if (!this.penBtn) return;
     for (const b of [this.penBtn, this.hlBtn, this.erBtn]) {
-      b.toggleClass('is-on', b.dataset.tool === t);
+      b.toggleClass('is-on', b.dataset.tool === this.tool);
     }
+    for (const d of this.swEls) {
+      d.toggleClass('is-on', d.dataset.color === this.color && this.tool !== 'er');
+    }
+    for (const d of this.wEls) {
+      d.toggleClass('is-on', Number(d.dataset.w) === this.width);
+    }
+    this.prBtn.toggleClass('is-on', this.pressure);
+    this.undoBtn.toggleClass('is-off', this.undoStack.length === 0);
+    this.redoBtn.toggleClass('is-off', this.redoStack.length === 0);
+    this.customSw.style.background = this.color;
   }
 
   resize() {
@@ -352,15 +512,9 @@ class QuireView extends TextFileView {
     this.penId = e.pointerId;
     const [x, y] = this.toWorld(e.clientX, e.clientY);
 
-    if (this.tool === 'er') { this.erasing = true; this.eraseAt(x, y); return; }
+    if (this.tool === 'er') { this.snapshot(); this.erasing = true; this.eraseAt(x, y); return; }
 
-    const hl = this.tool === 'hl';
-    this.cur = {
-      c: this.color,
-      w: hl ? this.width * 6 : this.width,
-      a: hl ? 0.35 : 1,
-      pts: [x, y, e.pressure > 0 ? e.pressure : 0.5],
-    };
+    this.cur = this.newStroke(x, y, this.prOf(e.pressure));
     this.schedule();
   };
 
@@ -386,13 +540,7 @@ class QuireView extends TextFileView {
     // 여기서 다시 시작한다. 「둘째 획부터 안 그려짐」이 이 자리였다.
     if (!this.cur && e.buttons !== 0 && this.tool !== 'er') {
       const [sx, sy] = this.toWorld(e.clientX, e.clientY);
-      const hl2 = this.tool === 'hl';
-      this.cur = {
-        c: this.color,
-        w: hl2 ? this.width * 6 : this.width,
-        a: hl2 ? 0.35 : 1,
-        pts: [sx, sy, e.pressure > 0 ? e.pressure : 0.5],
-      };
+      this.cur = this.newStroke(sx, sy, this.prOf(e.pressure));
       this.recovered = (this.recovered || 0) + 1;
     }
     if (!this.cur) return;
@@ -402,7 +550,7 @@ class QuireView extends TextFileView {
     const evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
     for (const p of evs) {
       const [x, y] = this.toWorld(p.clientX, p.clientY);
-      const pr = p.pressure > 0 ? p.pressure : 0.5;
+      const pr = this.prOf(p.pressure);
       const n = this.cur.pts.length;
       // 너무 촘촘하면 버린다. 화면 0.6px 미만은 눈에 안 보인다.
       if (n >= 3) {
@@ -420,7 +568,7 @@ class QuireView extends TextFileView {
         this.pred = [];
         for (const p of pe) {
           const [x, y] = this.toWorld(p.clientX, p.clientY);
-          this.pred.push(x, y, p.pressure > 0 ? p.pressure : 0.5);
+          this.pred.push(x, y, this.prOf(p.pressure));
         }
       }
     }
@@ -438,14 +586,7 @@ class QuireView extends TextFileView {
     if (this.erasing) { this.erasing = false; this.commitDoc(); return; }
     if (!this.cur) return;
 
-    if (this.cur.pts.length >= 3) {
-      this.cur.bb = bboxOf(this.cur.pts, this.cur.w);
-      this.doc.strokes.push(this.cur);
-      // 끝난 획을 base 에 한 번만 굽는다. 전체 재굽기가 아니다.
-      this.applyXform(this.bctx);
-      drawStroke(this.bctx, this.cur, this.doc.view.k);
-      this.commitDoc();
-    }
+    this.commitStroke();
     this.cur = null;
     this.pred = null;
     this.drawLive();
@@ -493,19 +634,13 @@ class QuireView extends TextFileView {
       e.preventDefault();
       const t0 = pen[0];
       const [x, y] = this.toWorld(t0.clientX, t0.clientY);
-      const pr = t0.force > 0 ? Math.min(1, t0.force) : 0.5;
+      const pr = this.prOf(t0.force);
 
       if (kind === 'start') {
         this.touches.clear();
         this.pinch = null;
-        if (this.tool === 'er') { this.erasing = true; this.eraseAt(x, y); return; }
-        const hl = this.tool === 'hl';
-        this.cur = {
-          c: this.color,
-          w: hl ? this.width * 6 : this.width,
-          a: hl ? 0.35 : 1,
-          pts: [x, y, pr],
-        };
+        if (this.tool === 'er') { this.snapshot(); this.erasing = true; this.eraseAt(x, y); return; }
+        this.cur = this.newStroke(x, y, pr);
         this.schedule();
         return;
       }
@@ -514,9 +649,7 @@ class QuireView extends TextFileView {
         if (this.erasing) { this.eraseAt(x, y); return; }
         // 펜을 뗐다 대는 사이에 start 를 놓쳤어도 여기서 다시 시작한다
         if (!this.cur) {
-          const hl = this.tool === 'hl';
-          this.cur = { c: this.color, w: hl ? this.width * 6 : this.width,
-                       a: hl ? 0.35 : 1, pts: [x, y, pr] };
+          this.cur = this.newStroke(x, y, pr);
           this.recovered = (this.recovered || 0) + 1;
           this.schedule();
           return;
@@ -531,13 +664,7 @@ class QuireView extends TextFileView {
 
       // end / cancel
       if (this.erasing) { this.erasing = false; this.commitDoc(); return; }
-      if (this.cur && this.cur.pts.length >= 6) {
-        this.cur.bb = bboxOf(this.cur.pts, this.cur.w);
-        this.doc.strokes.push(this.cur);
-        this.applyXform(this.bctx);
-        drawStroke(this.bctx, this.cur, this.doc.view.k);
-        this.commitDoc();
-      }
+      this.commitStroke();
       this.cur = null;
       this.drawLive();
       return;
@@ -570,13 +697,7 @@ class QuireView extends TextFileView {
       return;
     }
     // 그린 만큼은 살려서 굽고, 상태만 깨끗이 비운다
-    if (this.cur && this.cur.pts.length >= 6) {
-      this.cur.bb = bboxOf(this.cur.pts, this.cur.w);
-      this.doc.strokes.push(this.cur);
-      this.applyXform(this.bctx);
-      drawStroke(this.bctx, this.cur, this.doc.view.k);
-      this.commitDoc();
-    }
+    this.commitStroke();
     this.cur = null;
     this.pred = null;
     this.penId = null;
@@ -682,8 +803,13 @@ class QuireView extends TextFileView {
   }
 }
 
+const DEFAULT_SETTINGS = { tool: 'pen', color: PALETTE[0], width: WIDTHS[1], pressure: true };
+
 module.exports = class Quire extends Plugin {
   async onload() {
+    // 뷰가 생성자에서 읽으므로 registerView 보다 먼저 실어 둔다
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+
     this.registerView(VIEW_TYPE, (leaf) => new QuireView(leaf, this));
     this.registerExtensions([EXT], VIEW_TYPE);
 
@@ -724,5 +850,13 @@ module.exports = class Quire extends Plugin {
     return f;
   }
 
-  onunload() {}
+  // 획을 그을 때마다 디스크를 때리지 않게 묶는다
+  queueSave() {
+    if (this.saveT) clearTimeout(this.saveT);
+    this.saveT = setTimeout(() => { this.saveT = 0; this.saveData(this.settings); }, 600);
+  }
+
+  onunload() {
+    if (this.saveT) { clearTimeout(this.saveT); this.saveData(this.settings); }
+  }
 };
