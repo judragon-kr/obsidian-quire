@@ -36,5 +36,36 @@ function mkEl(tag){
   };
   return e;
 }
-const CTX = new Proxy({}, { get:(t,k)=> k in t ? t[k] : (t[k] = (typeof k==='string' && /^(save|restore|beginPath|moveTo|lineTo|quadraticCurveTo|stroke|fill|arc|clearRect|fillRect|setTransform|translate|scale)$/.test(k)) ? ()=>{} : undefined), set:(t,k,v)=>{t[k]=v;return true;} });
-module.exports = { Notice, Plugin, TextFileView, ItemView, Menu, __mkEl: mkEl };
+// 캔버스 2D 스텁. 호출을 세어 두면 「격자를 정말 그렸나」를 볼 수 있다.
+const CALLS = {};
+const METHODS = /^(save|restore|beginPath|closePath|moveTo|lineTo|quadraticCurveTo|arcTo|stroke|fill|arc|clearRect|fillRect|strokeRect|setTransform|translate|scale|setLineDash)$/;
+const CTX = new Proxy({}, {
+  get: (t, k) => {
+    if (k in t) return t[k];
+    if (typeof k === 'string' && METHODS.test(k))
+      return (t[k] = (...a) => { CALLS[k] = (CALLS[k] || 0) + 1; });
+    return undefined;
+  },
+  set: (t, k, v) => { t[k] = v; return true; },
+});
+CTX.__calls = CALLS;
+CTX.__reset = () => { for (const k of Object.keys(CALLS)) delete CALLS[k]; };
+// 캔버스는 CSS var() 를 못 받으므로 플러그인이 getComputedStyle 로 푼다
+global.getComputedStyle = () => ({ getPropertyValue: () => '#808080' });
+
+// 격자 타일이 offscreen 캔버스를 만든다
+global.document = global.document || {
+  createElement: (tag) => {
+    const c = mkEl(tag);
+    c.getContext = () => TILE;
+    return c;
+  },
+};
+const TILE = new Proxy({}, {
+  get: (t, k) => (k in t ? t[k]
+    : typeof k === 'string' && METHODS.test(k) ? (t[k] = () => {}) : undefined),
+  set: (t, k, v) => { t[k] = v; return true; },
+});
+CTX.createPattern = (c, rep) => { CALLS.createPattern = (CALLS.createPattern||0)+1; return { __pat: rep }; };
+
+module.exports = { Notice, Plugin, TextFileView, ItemView, Menu, __mkEl: mkEl, __ctx: CTX };

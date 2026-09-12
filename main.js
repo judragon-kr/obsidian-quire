@@ -25,6 +25,25 @@ const VIEW_TYPE = 'quire';
 const EXT = 'quire';
 
 const WIDTHS = [1.2, 2.2, 4, 7];
+const GRID_BASE = 28;   // world 단위 기본 간격. 화면 간격은 줌에 따라 2배씩 오르내린다
+
+// Obsidian 테마 변수를 실제 색으로 푼다. 캔버스는 var() 를 못 받는다.
+function cssVar(el, name, fallback) {
+  const v = getComputedStyle(el).getPropertyValue(name).trim();
+  return v || fallback;
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+const GRIDS = ['off', 'dot', 'line'];
 const PALETTE = ['#2f6de0', '#e03131', '#2f9e44', '#f08c00', '#343a40'];
 const DEFAULT = () => ({ v: 1, strokes: [], view: { x: 0, y: 0, k: 1 } });
 
@@ -123,6 +142,10 @@ class QuireView extends TextFileView {
     this.color = st.color;
     this.width = st.width;
     this.pressure = st.pressure;
+    this.grid = st.grid;
+    this.map = st.map;
+    this._bb = null;        // 내용 사각형 캐시. 획이 바뀌면 버린다
+    this._pats = new Map();  // 격자 타일. 모드×간격×색×dpr 로 키를 잡는다
     this.undoStack = [];
     this.redoStack = [];
     this.cur = null;          // 그리는 중인 획
@@ -155,12 +178,13 @@ class QuireView extends TextFileView {
       this.doc = DEFAULT();
       this.readonly = true;
     }
+    this._bb = null;
     if (!this.doc.view) this.doc.view = { x: 0, y: 0, k: 1 };
     this.needBake = true;
     this.resize();
   }
 
-  clear() { this.doc = DEFAULT(); this.needBake = true; this.resetHistory(); }
+  clear() { this.doc = DEFAULT(); this._bb = null; this.needBake = true; this.resetHistory(); }
 
   resetHistory() {
     this.undoStack = [];
@@ -279,6 +303,9 @@ class QuireView extends TextFileView {
     this.prBtn = btn('◐', 'Pressure sensitivity', () => this.setPressure(!this.pressure));
 
     bar.createSpan({ cls: 'quire-sep' });
+    this.gridBtn = btn('▦', 'Grid: off / dots / lines', () =>
+      this.setGrid(GRIDS[(GRIDS.indexOf(this.grid) + 1) % GRIDS.length]));
+    this.mapBtn = btn('🗺', 'Minimap', () => this.setMap(!this.map));
     btn('⊙', 'Fit to content', () => this.fit());
     btn('🐞', 'Toggle input diagnostics', () => {
       this.dbg = !this.dbg;
@@ -322,6 +349,7 @@ class QuireView extends TextFileView {
     this.snapshot();
     this.cur.bb = bboxOf(this.cur.pts, this.cur.w);
     this.doc.strokes.push(this.cur);
+    this._bb = null;
     this.applyXform(this.bctx);
     drawStroke(this.bctx, this.cur, this.doc.view.k);
     this.cur = null;
@@ -340,6 +368,7 @@ class QuireView extends TextFileView {
     if (!this.undoStack.length) return;
     this.redoStack.push(this.doc.strokes.slice());
     this.doc.strokes = this.undoStack.pop();
+    this._bb = null;
     this.needBake = true;
     this.schedule();
     this.commitDoc();
@@ -350,6 +379,7 @@ class QuireView extends TextFileView {
     if (!this.redoStack.length) return;
     this.undoStack.push(this.doc.strokes.slice());
     this.doc.strokes = this.redoStack.pop();
+    this._bb = null;
     this.needBake = true;
     this.schedule();
     this.commitDoc();
@@ -378,6 +408,23 @@ class QuireView extends TextFileView {
     this.refreshBar();
   }
 
+  setGrid(g) {
+    this.grid = g;
+    this.plugin.settings.grid = g;
+    this.plugin.queueSave();
+    this.needBake = true;
+    this.schedule();
+    this.refreshBar();
+  }
+
+  setMap(on) {
+    this.map = on;
+    this.plugin.settings.map = on;
+    this.plugin.queueSave();
+    this.drawLive();
+    this.refreshBar();
+  }
+
   setPressure(on) {
     this.pressure = on;
     this.plugin.settings.pressure = on;
@@ -399,6 +446,9 @@ class QuireView extends TextFileView {
       d.toggleClass('is-on', Number(d.dataset.w) === this.width);
     }
     this.prBtn.toggleClass('is-on', this.pressure);
+    this.gridBtn.toggleClass('is-on', this.grid !== 'off');
+    this.gridBtn.setText(this.grid === 'line' ? '▤' : '▦');
+    this.mapBtn.toggleClass('is-on', this.map);
     this.undoBtn.toggleClass('is-off', this.undoStack.length === 0);
     this.redoBtn.toggleClass('is-off', this.redoStack.length === 0);
     this.customSw.style.background = this.color;
@@ -448,6 +498,7 @@ class QuireView extends TextFileView {
     const ctx = this.bctx;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, this.base.width, this.base.height);
+    this.drawGrid(ctx);
     this.applyXform(ctx);
 
     const v = this.doc.view;
@@ -468,13 +519,163 @@ class QuireView extends TextFileView {
   }
 
   // 그리는 중인 획만. 매 프레임 돌아도 싸다.
+  // 격자는 base 에 굽는다 — 화면이 움직일 때만 다시 그려지므로 획을 긋는 동안은 공짜다.
+  // 간격은 화면 기준 16~64px 에 들어오게 2의 거듭제곱으로 올린다.
+  // 안 그러면 축소했을 때 선이 뭉개져 회색 판이 된다.
+  drawGrid(ctx) {
+    if (this.grid === 'off') return;
+    const v = this.doc.view, d = this.dpr;
+    const r = this.wrap.getBoundingClientRect();
+
+    // 화면 간격을 16~64px 안에 두고 2의 거듭제곱으로 오르내린다.
+    // 안 그러면 축소했을 때 선이 뭉개져 회색 판이 된다.
+    let step = GRID_BASE;
+    while (step * v.k < 16) step *= 2;
+    while (step * v.k > 64) step /= 2;
+    // 타일이 이음매 없이 반복되려면 간격이 정수 CSS px 여야 한다
+    const sp = Math.max(8, Math.round(step * v.k));
+
+    const col = cssVar(this.wrap, '--background-modifier-border', '#8888');
+    const pat = this.gridPattern(ctx, sp, col, d);
+    if (!pat) return;
+
+    ctx.save();
+    ctx.setTransform(d, 0, 0, d, 0, 0);
+    // world 0 은 화면 v.x 에 있고 격자점은 v.x + n·sp 이므로 원점이 격자에 얹힌다
+    const px = ((v.x % sp) + sp) % sp, py = ((v.y % sp) + sp) % sp;
+    ctx.translate(px, py);
+    ctx.fillStyle = pat;
+    ctx.fillRect(-sp, -sp, r.width + sp * 2, r.height + sp * 2);
+    ctx.setTransform(d, 0, 0, d, 0, 0);
+
+    // 원점. 격자는 어디나 똑같이 생겨서 이것 없이는 절대 위치를 못 잡는다.
+    const ox = v.x, oy = v.y;
+    if (ox > -20 && ox < r.width + 20 && oy > -20 && oy < r.height + 20) {
+      ctx.strokeStyle = cssVar(this.wrap, '--text-faint', '#888');
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(ox - 9, oy); ctx.lineTo(ox + 9, oy);
+      ctx.moveTo(ox, oy - 9); ctx.lineTo(ox, oy + 9);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // 격자 한 칸을 작은 캔버스에 한 번만 그려 두고 패턴으로 깐다.
+  // 점을 하나하나 그리면 전체 화면에 1,000개가 넘어 핀치 줌 때마다 그만큼 든다.
+  gridPattern(ctx, sp, col, d) {
+    // 한 칸만 캐시하면 핀치 중에 sp 가 매 프레임 바뀌어 타일을 계속 새로 만든다.
+    // sp 는 16~64 사이 정수뿐이라 칸을 여럿 둬도 몇십 개면 다 찬다.
+    const key = `${this.grid}|${sp}|${col}|${d}`;
+    const hit = this._pats.get(key);
+    if (hit) return hit;
+    const c = document.createElement('canvas');
+    c.width = c.height = Math.max(1, Math.round(sp * d));
+    const g = c.getContext('2d');
+    if (!g) return null;
+    g.scale(d, d);
+    if (this.grid === 'line') {
+      g.strokeStyle = col;
+      g.lineWidth = 1;
+      g.beginPath();
+      g.moveTo(0.5, 0); g.lineTo(0.5, sp);
+      g.moveTo(0, 0.5); g.lineTo(sp, 0.5);
+      g.stroke();
+    } else {
+      g.fillStyle = col;
+      g.beginPath();
+      g.arc(0, 0, 1.1, 0, 6.284);
+      g.fill();
+    }
+    const pat = ctx.createPattern(c, 'repeat');
+    if (this._pats.size > 96) this._pats.clear();
+    this._pats.set(key, pat);
+    return pat;
+  }
+
+
+  // 획 전체를 감싸는 사각형. 미니맵이 매 프레임 쓰므로 캐시한다.
+  contentBB() {
+    if (this._bb) return this._bb;
+    const ss = this.doc.strokes;
+    if (!ss.length) return (this._bb = null);
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const s of ss) {
+      const b = s.bb || bboxOf(s.pts, s.w);
+      if (b[0] < x0) x0 = b[0];
+      if (b[1] < y0) y0 = b[1];
+      if (b[2] > x1) x1 = b[2];
+      if (b[3] > y1) y1 = b[3];
+    }
+    return (this._bb = [x0, y0, x1, y1]);
+  }
+
+  // 미니맵은 live 에 화면 좌표로 얹는다. 내용 사각형과 지금 보는 창을 같이 그려
+  // 「전체 중 어디를 보고 있나」를 한 눈에 준다.
+  drawMap(ctx) {
+    if (!this.map) return;
+    const bb = this.contentBB();
+    const r = this.wrap.getBoundingClientRect();
+    const v = this.doc.view;
+    // 지금 보고 있는 창(world)
+    const wx0 = -v.x / v.k, wy0 = -v.y / v.k;
+    const wx1 = (r.width - v.x) / v.k, wy1 = (r.height - v.y) / v.k;
+    // 내용과 창을 함께 담는 범위. 내용이 없으면 창만.
+    let x0 = wx0, y0 = wy0, x1 = wx1, y1 = wy1;
+    if (bb) { x0 = Math.min(x0, bb[0]); y0 = Math.min(y0, bb[1]);
+              x1 = Math.max(x1, bb[2]); y1 = Math.max(y1, bb[3]); }
+    // 원점도 담아야 「원점에서 얼마나 왔나」가 보인다
+    x0 = Math.min(x0, 0); y0 = Math.min(y0, 0);
+    x1 = Math.max(x1, 0); y1 = Math.max(y1, 0);
+
+    const MW = 108, MH = 78, PAD = 8, M = 6;
+    const bx = r.width - MW - PAD, by = r.height - MH - PAD;
+    const s = Math.min((MW - M * 2) / (x1 - x0 || 1), (MH - M * 2) / (y1 - y0 || 1));
+    const ox = bx + MW / 2 - ((x0 + x1) / 2) * s;
+    const oy = by + MH / 2 - ((y0 + y1) / 2) * s;
+    const P = (wx, wy) => [ox + wx * s, oy + wy * s];
+
+    ctx.save();
+    ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    // 미니맵은 live 위에 있어 오른쪽 아래에 쓴 글씨를 가린다.
+    // 긋는 동안은 흐리게 해서 밑이 비치게 한다.
+    const A = this.cur ? 0.3 : 0.9;
+    ctx.globalAlpha = A;
+    ctx.fillStyle = cssVar(this.wrap, '--background-secondary', '#2226');
+    ctx.strokeStyle = cssVar(this.wrap, '--background-modifier-border', '#8886');
+    ctx.lineWidth = 1;
+    roundRect(ctx, bx, by, MW, MH, 6);
+    ctx.fill();
+    ctx.stroke();
+
+    if (bb) {
+      const [ax, ay] = P(bb[0], bb[1]), [cx, cy] = P(bb[2], bb[3]);
+      ctx.fillStyle = cssVar(this.wrap, '--text-faint', '#888');
+      ctx.globalAlpha = A * 0.4;
+      ctx.fillRect(ax, ay, Math.max(1, cx - ax), Math.max(1, cy - ay));
+      ctx.globalAlpha = A;
+    }
+    // 원점
+    const [zx, zy] = P(0, 0);
+    ctx.fillStyle = cssVar(this.wrap, '--text-muted', '#999');
+    ctx.fillRect(zx - 1.5, zy - 1.5, 3, 3);
+    // 지금 보는 창
+    const [vx, vy] = P(wx0, wy0), [vX, vY] = P(wx1, wy1);
+    ctx.strokeStyle = cssVar(this.wrap, '--interactive-accent', '#4a8');
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(vx, vy, Math.max(2, vX - vx), Math.max(2, vY - vy));
+    ctx.restore();
+  }
+
   drawLive() {
     const ctx = this.lctx;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, this.live.width, this.live.height);
-    if (!this.cur) return;
-    this.applyXform(ctx);
-    drawStroke(ctx, this.cur, this.doc.view.k);
+    if (this.cur) {
+      this.applyXform(ctx);
+      drawStroke(ctx, this.cur, this.doc.view.k);
+    }
+    this.drawMap(ctx);
   }
 
   // ── 입력 ────────────────────────────────────────────────
@@ -793,7 +994,7 @@ class QuireView extends TextFileView {
         }
       }
     }
-    if (hit) { this.needBake = true; this.schedule(); }
+    if (hit) { this._bb = null; this.needBake = true; this.schedule(); }
   }
 
   fit() {
@@ -821,7 +1022,8 @@ class QuireView extends TextFileView {
   }
 }
 
-const DEFAULT_SETTINGS = { tool: 'pen', color: PALETTE[0], width: WIDTHS[1], pressure: true };
+const DEFAULT_SETTINGS = { tool: 'pen', color: PALETTE[0], width: WIDTHS[1], pressure: true,
+                           grid: 'dot', map: true };
 
 module.exports = class Quire extends Plugin {
   async onload() {

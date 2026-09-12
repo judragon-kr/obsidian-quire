@@ -38,7 +38,15 @@ desktop.
 - Undo and redo, 60 steps deep, covering erases as well as strokes
 - Five colour presets plus a custom colour picker
 - Fit to content
-- Tool, colour, width and the pressure setting persist across restarts
+- **Background grid** — off, dots or lines. Spacing steps by powers of two so it stays
+  between 16 and 64 screen pixels at any zoom. Drawn as a cached tile pattern, so it costs
+  one `fillRect` per rebake regardless of viewport size or zoom.
+- **Origin marker** — a small cross at world (0, 0). A grid looks the same everywhere, so
+  without it the grid tells you nothing about where you are.
+- **Minimap** — bottom right, showing the bounding box of everything drawn, the origin, and
+  the window you are currently looking at. It fades while you are drawing so it does not
+  hide strokes underneath.
+- Tool, colour, width, pressure, grid mode and minimap persist across restarts
 - Viewport culling — off-screen strokes are skipped when the committed layer is rebuilt
 - An input diagnostics overlay (the 🐞 button) showing event counts and a timestamped
   event trace, for reporting stylus problems on hardware I cannot test
@@ -47,6 +55,7 @@ desktop.
 
 Stated plainly so nobody is surprised:
 
+- The minimap is display only — you cannot tap it to jump
 - No stroke selection or move
 - No PDF or image background
 - No text

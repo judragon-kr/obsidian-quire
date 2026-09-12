@@ -26,6 +26,7 @@ const p = new Quire();
   v.wrap = ob.__mkEl('div');            // resize() 가 쓰는 것들
   await v.onOpen();
 
+  const GRIDS_NEXT = (g) => ({ off:'dot', dot:'line', line:'off' })[g];
   const fail = [];
   const ok = (c, m) => { console.log(`  ${c ? '○' : '✗'} ${m}`); if (!c) fail.push(m); };
 
@@ -85,6 +86,76 @@ const p = new Quire();
   v.cur = null;
   v.onMove({ pointerType:'mouse', buttons:1, clientX:100, clientY:5000, pressure:0.5, preventDefault(){}, getCoalescedEvents:null });
   ok(v.cur === null, '캔버스 밖에서는 자가복구가 안 걸린다');
+
+  // ── 격자 ──
+  ok(v.grid === 'dot', '격자 기본값은 점');
+  v.setGrid('line'); ok(p.settings.grid === 'line', '격자 설정이 저장된다');
+  const cyc = [];
+  v.setGrid('off');
+  for (let i = 0; i < 4; i++) { cyc.push(v.grid); v.setGrid(GRIDS_NEXT(v.grid)); }
+  ok(cyc.join('>') === 'off>dot>line>off', `격자가 off>dot>line 로 돈다 (${cyc.join('>')})`);
+
+  // ── 실제로 그려지나 ── 세 모드 × 획 있음/없음
+  const C = ob.__ctx;
+  v.doc.strokes = [];
+  for (const g of ['off', 'dot', 'line']) {
+    v.grid = g;
+    for (const withStrokes of [false, true]) {
+      v.doc.strokes = withStrokes
+        ? [{ c:'#000', w:2, a:1, pts:[0,0,1, 40,40,1], bb:[-1,-1,41,41] }] : [];
+      v._bb = null;
+      C.__reset();
+      try { v.bake(); v.drawLive(); }
+      catch (e) { ok(false, `bake/drawLive 가 던짐 grid=${g} 획=${withStrokes}: ${e.message}`); continue; }
+      const n = Object.values(C.__calls).reduce((a, b) => a + b, 0);
+      ok(n > 0, `grid=${g} 획=${withStrokes} → 그리기 호출 ${n}건`);
+    }
+  }
+
+  // ── 패턴이 재사용되나 ── 뷰가 안 바뀌면 타일을 다시 안 만든다
+  v.doc.strokes = []; v._bb = null; v.grid = 'dot'; v._pats.clear();
+  C.__reset(); v.bake(); const p1 = C.__calls.createPattern || 0;
+  C.__reset(); v.bake(); v.bake(); v.bake(); const p2 = C.__calls.createPattern || 0;
+  ok(p1 === 1 && p2 === 0, `타일은 한 번만 만든다 (첫 굽기 ${p1} · 이후 3회 ${p2})`);
+  v.setGrid('line');
+  C.__reset(); v.bake(); ok((C.__calls.createPattern||0) === 1, '모드를 바꾸면 타일을 다시 만든다');
+
+  // ── 핀치 중 타일을 계속 새로 만들지 않나 ── 줌을 40프레임 흔들어 본다
+  v.grid = 'dot'; v._pats.clear(); v.doc.strokes = [];
+  C.__reset();
+  for (let i = 0; i < 40; i++) { v.doc.view.k = 1 + (i % 8) * 0.05; v.bake(); }
+  const made = C.__calls.createPattern || 0;
+  v.doc.view.k = 1;
+  ok(made <= 8, `줌을 40프레임 흔들어도 타일은 간격 수만큼만 만든다 (${made}건)`);
+
+  // ── 격자 비용이 화면 크기와 무관한가 ──
+  v.grid = 'dot'; v.bake();
+  C.__reset(); v.bake(); const nSmall = Object.values(C.__calls).reduce((a,b)=>a+b,0);
+  v.wrap.getBoundingClientRect = () => ({left:0,top:0,right:4000,bottom:3000,width:4000,height:3000});
+  C.__reset(); v.bake(); const nBig = Object.values(C.__calls).reduce((a,b)=>a+b,0);
+  ok(nBig === nSmall, `격자 비용이 화면 크기에 안 비례한다 (800x600 ${nSmall} · 4000x3000 ${nBig})`);
+  v.wrap.getBoundingClientRect = () => ({left:0,top:0,right:800,bottom:600,width:800,height:600});
+
+  // ── 격자를 끄면 격자 몫이 빠지나 ──
+  v.doc.strokes = []; v._bb = null;
+  v.grid = 'off'; C.__reset(); v.bake(); const nOff = (C.__calls.stroke||0)+(C.__calls.fill||0);
+  v.grid = 'dot'; C.__reset(); v.bake(); const nDot = (C.__calls.stroke||0)+(C.__calls.fill||0);
+  ok(nDot > nOff, `격자 켜면 그리기가 는다 (off ${nOff} → dot ${nDot})`);
+
+  // ── 미니맵 ──
+  v.map = false; C.__reset(); v.drawLive(); const mOff = C.__calls.strokeRect || 0;
+  v.map = true;  C.__reset(); v.drawLive(); const mOn  = C.__calls.strokeRect || 0;
+  ok(mOn > mOff, `미니맵을 켜면 창 사각형이 그려진다 (${mOff} → ${mOn})`);
+  v.setMap(false); ok(p.settings.map === false, '미니맵 설정이 저장된다');
+
+  // ── 내용 사각형 캐시 ──
+  v.doc.strokes = [{ c:'#000', w:2, a:1, pts:[10,10,1, 20,20,1], bb:[9,9,21,21] }];
+  v._bb = null;
+  const bb1 = v.contentBB();
+  ok(bb1 && bb1[0] === 9 && bb1[2] === 21, '내용 사각형이 맞다');
+  ok(v.contentBB() === bb1, '두 번째 호출은 캐시를 쓴다');
+  v.cur = { c:'#000', w:2, a:1, pts:[100,100,1, 110,110,1] }; v.commitStroke();
+  ok(v.contentBB()[2] >= 110, '획을 더하면 캐시가 버려지고 다시 잰다');
 
   console.log(fail.length ? `\n✗ 실패 ${fail.length}건` : '\n○ 전부 통과');
   process.exit(fail.length ? 1 : 0);
