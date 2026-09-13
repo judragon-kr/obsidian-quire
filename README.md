@@ -34,12 +34,24 @@ Pick the **⬚** tool, draw a lasso around what you want, then drag it. Only thi
 **entirely inside** the lasso are picked up — partly-crossed strokes are left alone, so
 what you get is predictable. `Delete` removes the selection, `Escape` drops it.
 
-## Radial menu — hold the pen down
+## Radial menu — two ways to open it
 
 Apple Pencil's double-tap and squeeze are not handed to web views by WebKit, so a plugin
-cannot read them. Holding the pen still for a moment does the same job: a wheel opens
-where the pen is. Inner ring picks the tool, outer ring picks colour and width. Slide onto
-one and lift. Lift in the middle, or well outside, to cancel.
+cannot read them. Two gestures stand in.
+
+**Rest a finger and tap** — with the pen on the glass, tap once with a finger. The wheel
+opens at the pen, with no waiting. It fires when the finger *lifts*, so a palm parked on
+the screen never triggers it: a palm stays down.
+
+**Or hold the pen still** for a moment. A ring fills at the tip so you can see it coming,
+and moving away cancels it.
+
+Inner ring picks the tool, outer ring picks colour and width. Slide onto one and lift.
+Lift in the middle, or well outside, to cancel.
+
+The first release used 420 ms and a 9 px tolerance, and it almost never fired on a real
+iPad — holding a pen in your hand drifts more than 9 px in that time, and any drift
+cancelled it. It is 280 ms and 22 px now.
 
 ## Images
 

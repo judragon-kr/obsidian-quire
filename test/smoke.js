@@ -17,6 +17,7 @@ global.requestAnimationFrame = (f)=>1; global.cancelAnimationFrame = ()=>{};
 global.ResizeObserver = class { observe(){} disconnect(){} };
 global.performance = { now: () => 0 };
 
+const TAP_MS_TEST = 320;   // main.js 의 TAP_MS 와 같아야 한다
 const Quire = require(path.join(__dirname, '..', 'main.js'));
 const p = new Quire();
 (async () => {
@@ -267,6 +268,44 @@ const p = new Quire();
              preventDefault(){}, getCoalescedEvents(){ return []; } });
   ok(v.cur === null, 'sel 도구에서 자가 복구가 획을 안 만든다');
   v.setTool('pen'); v.cancelLong(); v.lasso = null; v.drag = null;
+
+  // ── I. 꾹 누르기 · 손가락 톡 ────────────────────────────
+  v.setViewData(''); v.setTool('pen'); v.cur=null; v.radial=null; v.tap=null; v.cancelLong();
+
+  // 손떨림 정도로는 안 끊겨야 한다 — 420ms·9px 이던 때 실기기에서 안 뜬 자리
+  v.beginPen(0, 0, 1, 100, 100);
+  ok(v.longT !== 0, '펜을 대면 꾹 누르기 시계가 돈다');
+  v.movePen(0, 0, 108, 106);                       // 10px — 손떨림
+  ok(v.longT !== 0, '10px 흔들려도 안 끊긴다');
+  v.movePen(0, 0, 130, 130);                       // 42px — 획을 긋는 것
+  ok(v.longT === 0, '크게 움직이면 끊긴다');
+
+  // 손가락 톡 — 뗄 때 열린다. 얹어 둔 손바닥은 안 걸린다
+  v.cancelLong(); v.radial=null; v.tap=null;
+  v.penPos = [200, 150];
+  v.fingerTapDown({ identifier: 7, clientX: 50, clientY: 50 });
+  ok(v.tap !== null, '손가락이 닿으면 톡 후보로 잡는다');
+  ok(v.radial === null, '닿는 순간에는 안 연다');
+  ok(v.fingerTapUp({ identifier: 7, clientX: 52, clientY: 51 }) === true, '짧게 떼면 연다');
+  ok(v.radial !== null && v.radial.cx === 200, '메뉴가 펜 자리에 뜬다');
+
+  // 오래 눌린 것(손바닥)은 톡이 아니다
+  v.closeRadial(false); v.tap=null;
+  v.fingerTapDown({ identifier: 8, clientX: 50, clientY: 50 });
+  v.tap.at -= (TAP_MS_TEST + 50);
+  ok(v.fingerTapUp({ identifier: 8, clientX: 50, clientY: 50 }) === false, '오래 눌렸으면 톡이 아니다');
+  ok(v.radial === null, '그 경우 메뉴가 안 뜬다');
+
+  // 많이 끌린 것도 톡이 아니다
+  v.tap=null;
+  v.fingerTapDown({ identifier: 9, clientX: 50, clientY: 50 });
+  ok(v.fingerTapUp({ identifier: 9, clientX: 90, clientY: 90 }) === false, '끌었으면 톡이 아니다');
+
+  // 펜이 안 닿아 있으면 톡이 무의미하다
+  v.tap=null; v.penPos=null;
+  v.fingerTapDown({ identifier: 10, clientX: 50, clientY: 50 });
+  ok(v.fingerTapUp({ identifier: 10, clientX: 50, clientY: 50 }) === false, '펜이 없으면 안 연다');
+  v.cancelLong(); v.radial=null; v.tap=null; v.cur=null;
 
   console.log(fail.length ? `\n✗ 실패 ${fail.length}건` : '\n○ 전부 통과');
   process.exit(fail.length ? 1 : 0);

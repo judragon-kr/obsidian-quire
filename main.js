@@ -50,8 +50,16 @@ const PALETTE = ['#2f6de0', '#e03131', '#2f9e44', '#f08c00', '#343a40', '#ffffff
 // setViewData 가 없으면 빈 배열을 넣는다. 버전을 올렸다고 옛 파일을 거르지 않는다.
 const DEFAULT = () => ({ v: 2, strokes: [], images: [], view: { x: 0, y: 0, k: 1 } });
 
-const LONG_MS = 420;    // 이만큼 안 움직이고 누르면 방사형 메뉴
-const LONG_SLOP = 9;    // 화면 px. 이보다 움직이면 그냥 획이다
+// 꾹 누르기 — 420ms · 9px 로 뒀더니 실기기에서 거의 안 떴다.
+// 펜을 손에 쥔 채 420ms 를 버티면 손떨림만으로 9px 를 넘는다. 넘으면 취소되니
+// 사실상 발동이 안 됐다. 짧게·헐겁게 바꾸고, 차오르는 링으로 진행을 보여 준다.
+const LONG_MS = 280;
+const LONG_SLOP = 22;   // 화면 px. 이보다 움직이면 획을 그으려는 것으로 본다
+
+// 펜을 댄 채 손가락으로 톡 — 기다림 없이 메뉴를 연다.
+// 손가락을 **뗄 때** 열어서 화면에 얹어 둔 손바닥은 절대 안 걸린다(계속 닿아 있으므로).
+const TAP_MS = 320;     // 이 안에 떼야 톡으로 침
+const TAP_SLOP = 16;    // 이보다 움직이면 톡이 아니다
 
 // 다각형 안에 있나 — 광선 투사. 올가미가 이걸로 획을 고른다.
 function pointInPoly(px, py, poly) {
@@ -839,6 +847,7 @@ class QuireView extends TextFileView {
 
     this.drawSel(ctx);
     this.drawMap(ctx);
+    this.drawHold(ctx);
     this.drawRadial(ctx);
   }
 
@@ -892,18 +901,62 @@ class QuireView extends TextFileView {
   armLong(cx, cy) {
     this.cancelLong();
     this.longAt = [cx, cy];
+    this.longStart = Date.now();
     this.longT = setTimeout(() => {
       this.longT = 0;
-      this.openRadial(cx - this.live.getBoundingClientRect().left,
-                      cy - this.live.getBoundingClientRect().top);
+      const r = this.live.getBoundingClientRect();
+      this.openRadial(cx - r.left, cy - r.top);
     }, LONG_MS);
+    this.schedule();
   }
 
   cancelLong() {
     if (this.longT) { clearTimeout(this.longT); this.longT = 0; }
+    if (this.longAt) { this.longAt = null; this.schedule(); }
+  }
+
+  // 차오르는 링. 이게 없으면 언제 뜨는지 몰라 일찍 떼거나 오래 누른다.
+  drawHold(ctx) {
+    if (!this.longT || !this.longAt) return;
+    const r = this.live.getBoundingClientRect();
+    const cx = this.longAt[0] - r.left, cy = this.longAt[1] - r.top;
+    const p = Math.min(1, (Date.now() - this.longStart) / LONG_MS);
+    ctx.save();
+    ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    ctx.strokeStyle = cssVar(this.wrap, '--background-modifier-border', '#8886');
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(cx, cy, 22, 0, 6.283);
+    ctx.stroke();
+    ctx.strokeStyle = cssVar(this.wrap, '--interactive-accent', '#4a8');
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.arc(cx, cy, 22, -Math.PI / 2, -Math.PI / 2 + 6.283 * p);
+    ctx.stroke();
+    ctx.restore();
+    this.schedule();          // 다 찰 때까지 계속 다시 그린다
+  }
+
+  // 펜을 댄 채 손가락으로 톡 — 뗄 때 연다
+  fingerTapDown(t) {
+    this.tap = { id: t.identifier, at: Date.now(), x: t.clientX, y: t.clientY };
+  }
+
+  fingerTapUp(t) {
+    const k = this.tap;
+    this.tap = null;
+    if (!k || k.id !== t.identifier) return false;
+    if (Date.now() - k.at > TAP_MS) return false;
+    const dx = t.clientX - k.x, dy = t.clientY - k.y;
+    if (dx * dx + dy * dy > TAP_SLOP * TAP_SLOP) return false;
+    if (!this.penPos) return false;
+    const r = this.live.getBoundingClientRect();
+    this.openRadial(this.penPos[0] - r.left, this.penPos[1] - r.top);
+    return true;
   }
 
   beginPen(x, y, pr, cx, cy) {
+    this.penPos = [cx, cy];
     if (this.radial) { this.radial.hit = null; return true; }   // 떠 있으면 다시 안 연다
     this.armLong(cx, cy);
 
@@ -927,6 +980,7 @@ class QuireView extends TextFileView {
   }
 
   movePen(x, y, cx, cy) {
+    this.penPos = [cx, cy];
     if (this.radial) {
       const r = this.live.getBoundingClientRect();
       this.radial.hit = this.radialHit(cx - r.left, cy - r.top);
@@ -956,6 +1010,8 @@ class QuireView extends TextFileView {
   }
 
   endPen() {
+    this.penPos = null;
+    this.tap = null;
     this.cancelLong();
     if (this.radial) { this.closeRadial(true); return true; }
     if (this.erasing) { this.erasing = false; this.commitDoc(); return true; }
@@ -1178,8 +1234,24 @@ class QuireView extends TextFileView {
       return;
     }
 
-    // ── 손가락 ── 펜이 닿아 있으면 통째로 무시(팜 리젝션)
-    if (penLive || this.cur || this.erasing) { e.preventDefault(); return; }
+    // ── 손가락 ──
+    // 펜이 닿아 있는 동안 손가락은 팜 리젝션 대상이다. 다만 **짧게 톡**은 뜻이 있다 —
+    // 그 자리에 방사형 메뉴를 연다. 뗄 때 판정하므로 얹어 둔 손바닥은 안 걸린다.
+    if (penLive || this.cur || this.erasing) {
+      e.preventDefault();
+      if (kind === 'start' && fin.length === 1 && !this.radial) this.fingerTapDown(fin[0]);
+      else if (kind === 'start') this.tap = null;          // 둘 이상이면 톡이 아니다
+      else if (kind === 'move') {
+        const k = this.tap;
+        if (k) for (const t of fin) if (t.identifier === k.id) {
+          const dx = t.clientX - k.x, dy = t.clientY - k.y;
+          if (dx * dx + dy * dy > TAP_SLOP * TAP_SLOP) this.tap = null;
+        }
+      } else {
+        for (const t of fin) if (this.fingerTapUp(t)) break;
+      }
+      return;
+    }
 
     if (kind === 'start') {
       for (const t of fin) this.touches.set(t.identifier, t);
