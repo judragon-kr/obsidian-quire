@@ -56,10 +56,14 @@ simply within reach.
 
 ## Radial menu — hold the pen still
 
-Press and hold without moving; a ring fills at the tip and the wheel opens at 620 ms.
-Moving the pen cancels it at once, so a stroke never triggers it.
+Press and hold without moving; the wheel opens at 900 ms. Moving the pen cancels it at
+once, so a stroke never triggers it.
 
-**620 ms is the point.** The two earlier attempts used 420 ms and 280 ms, and both
+The ring only appears **halfway through**, at 450 ms. Drawing it from the start meant a
+faint ring flashed at the beginning of every stroke — a stroke cancels long before 450 ms,
+so now nothing shows unless you are actually holding.
+
+**900 ms is the point.** The two earlier attempts used 420 ms and 280 ms, and both
 collided with placing a dot — a dot is a press and a lift, usually under 300 ms.
 Separating them by *distance* failed in both directions: 9 px was cancelled by hand
 tremor, 22 px fired while rolling the pen. Time separates them cleanly.

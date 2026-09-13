@@ -55,8 +55,11 @@ const DEFAULT = () => ({ v: 2, strokes: [], images: [], view: { x: 0, y: 0, k: 1
 //   280ms · 22px  점 찍는 굴림에 발동 — 오발동
 // 둘 다 시간이 짧아 점과 겹쳤다. 점은 눌렀다 바로 뗀다(보통 300ms 아래).
 // 시간을 늘리고 거리는 다시 조인다. 움직이면 취소되고, 링으로 진행이 보인다.
-const LONG_MS = 620;
+const LONG_MS = 900;
 const LONG_SLOP = 14;   // 화면 px. 이보다 움직이면 획을 그으려는 것으로 본다
+// 링은 절반이 지나서야 나타난다. 앞부분에도 그리면 획을 그을 때마다 잠깐씩 비쳐
+// 「뜰까 말까」 하는 것이 거슬린다. 획은 그전에 움직여 취소되므로 아예 안 보인다.
+const RING_FROM = 0.5;
 
 // 펜을 댄 채 손가락으로 톡 — 기다림 없이 메뉴를 연다.
 // 손가락을 **뗄 때** 열어서 화면에 얹어 둔 손바닥은 절대 안 걸린다(계속 닿아 있으므로).
@@ -933,9 +936,10 @@ class QuireView extends TextFileView {
     const r = this.live.getBoundingClientRect();
     const cx = this.longAt[0] - r.left, cy = this.longAt[1] - r.top;
     const p = Math.min(1, (Date.now() - this.longStart) / LONG_MS);
+    if (p < RING_FROM) { this.schedule(); return; }   // 절반 전에는 안 그린다
     ctx.save();
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
-    ctx.globalAlpha = Math.min(1, p * 2.6);      // 점 찍는 짧은 접촉에는 거의 안 보인다
+    ctx.globalAlpha = Math.min(1, (p - RING_FROM) / (1 - RING_FROM) * 2);
     ctx.strokeStyle = cssVar(this.wrap, '--background-modifier-border', '#8886');
     ctx.lineWidth = 3;
     ctx.beginPath();
@@ -944,7 +948,8 @@ class QuireView extends TextFileView {
     ctx.strokeStyle = cssVar(this.wrap, '--interactive-accent', '#4a8');
     ctx.lineCap = 'round';
     ctx.beginPath();
-    ctx.arc(cx, cy, 24, -Math.PI / 2, -Math.PI / 2 + 6.283 * p);
+    const q = (p - RING_FROM) / (1 - RING_FROM);
+    ctx.arc(cx, cy, 24, -Math.PI / 2, -Math.PI / 2 + 6.283 * q);
     ctx.stroke();
     ctx.restore();
     this.schedule();          // 다 찰 때까지 계속 다시 그린다
