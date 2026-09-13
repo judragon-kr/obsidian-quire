@@ -467,8 +467,10 @@ const p = new Quire();
     let seed = 7;
     const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff - 0.5; };
     const noisy = (f, n, amp) => { const a = []; for (let i = 0; i <= n; i++) { const q = f(i / n); a.push(q[0] + rnd() * amp, q[1] + rnd() * amp, 1); } return a; };
+    // t=1 에서 시작점으로 돌아와야 닫힌 것으로 잡힌다. min 으로 물리면 마지막 변이 통째로 빠져
+    // 도형이 열린 채가 되고, 그러면 사각형·삼각형이 전부 null 이 된다.
     const poly = (c, n, amp) => noisy((t) => {
-      const m = c.length - 1, s = Math.min(m - 1, Math.floor(t * m)), u = (t * m) % 1;
+      const m = c.length - 1, s = Math.floor(t * m) % m, u = (t * m) % 1;
       return [c[s][0] + (c[s + 1][0] - c[s][0]) * u, c[s][1] + (c[s + 1][1] - c[s][1]) * u];
     }, n, amp);
     const cases = [
