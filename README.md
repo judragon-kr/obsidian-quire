@@ -54,7 +54,17 @@ Apple Pencil's double-tap and squeeze would solve this, but WebKit does not hand
 web views — they are native-only. So the palette carries no detection at all: it is
 simply within reach.
 
-The radial wheel is still there for the finger tap, if you want it.
+## Radial menu — hold the pen still
+
+Press and hold without moving; a ring fills at the tip and the wheel opens at 620 ms.
+Moving the pen cancels it at once, so a stroke never triggers it.
+
+**620 ms is the point.** The two earlier attempts used 420 ms and 280 ms, and both
+collided with placing a dot — a dot is a press and a lift, usually under 300 ms.
+Separating them by *distance* failed in both directions: 9 px was cancelled by hand
+tremor, 22 px fired while rolling the pen. Time separates them cleanly.
+
+A finger tap while the pen is down also opens it.
 
 ## Images
 

@@ -273,11 +273,22 @@ const p = new Quire();
   // ── I. 꾹 누르기 · 손가락 톡 ────────────────────────────
   v.setViewData(''); v.setTool('pen'); v.cur=null; v.radial=null; v.tap=null;
 
-  // 펜만으로는 안 열려야 한다 — 점 찍으려고 굴리면 메뉴가 뜨던 자리
+  // 꾹 누르기 — 620ms. 점은 그보다 훨씬 짧으니 안 겹친다
   v.beginPen(0, 0, 1, 100, 100);
-  v.movePen(0, 0, 104, 103);                       // 점 찍을 때의 미세한 굴림
-  ok(v.radial === null, '펜을 대고 굴려도 메뉴가 안 뜬다');
-  ok(v.cur !== null, '그 대신 획이 그어진다');
+  ok(v.longT !== 0, '펜을 대면 시계가 돈다');
+  v.movePen(0, 0, 108, 106);                       // 10px — 손떨림·점 굴림
+  ok(v.longT !== 0, '10px 흔들려도 안 끊긴다');
+  ok(v.radial === null, '아직 안 뜬다 — 620ms 를 기다려야 한다');
+  v.movePen(0, 0, 130, 130);                       // 42px — 획을 긋는 것
+  ok(v.longT === 0, '펜이 움직이면 즉시 접힌다');
+  ok(v.radial === null, '움직였으면 안 뜬다');
+  v.cur = null; v.cancelLong();
+
+  // 뗄 때도 접힌다 — 점을 찍고 떼면 시계가 남으면 안 된다
+  v.beginPen(0, 0, 1, 200, 200);
+  ok(v.longT !== 0, '다시 대면 다시 돈다');
+  v.endPen();
+  ok(v.longT === 0, '펜을 떼면 시계가 접힌다');
   v.cur = null;
 
   // 손가락 톡 — 뗄 때 열린다. 얹어 둔 손바닥은 안 걸린다

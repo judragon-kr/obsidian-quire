@@ -50,11 +50,13 @@ const PALETTE = ['#2f6de0', '#e03131', '#2f9e44', '#f08c00', '#343a40', '#ffffff
 // setViewData 가 없으면 빈 배열을 넣는다. 버전을 올렸다고 옛 파일을 거르지 않는다.
 const DEFAULT = () => ({ v: 2, strokes: [], images: [], view: { x: 0, y: 0, k: 1 } });
 
-// 꾹 누르기는 뺐다. **펜만으로 메뉴를 여는 제스처는 이 앱에서 성립하지 않는다** —
-// 그리는 것도 펜을 유리에 대는 것이라 점 찍기·잠깐 멈추기와 구분할 방법이 없다.
-//   420ms · 9px  → 손떨림에 취소돼 거의 안 떴음
-//   280ms · 22px → 점 찍으려고 펜을 굴리면 떴음
-// 두 값 사이에 쓸 만한 자리가 없어 없앴다. 여는 길은 손가락 톡 하나다.
+// 꾹 누르기 — 점 찍기와 가르는 축은 **거리가 아니라 시간**이다.
+//   420ms · 9px   손떨림에 취소 — 거의 안 떴음
+//   280ms · 22px  점 찍는 굴림에 발동 — 오발동
+// 둘 다 시간이 짧아 점과 겹쳤다. 점은 눌렀다 바로 뗀다(보통 300ms 아래).
+// 시간을 늘리고 거리는 다시 조인다. 움직이면 취소되고, 링으로 진행이 보인다.
+const LONG_MS = 620;
+const LONG_SLOP = 14;   // 화면 px. 이보다 움직이면 획을 그으려는 것으로 본다
 
 // 펜을 댄 채 손가락으로 톡 — 기다림 없이 메뉴를 연다.
 // 손가락을 **뗄 때** 열어서 화면에 얹어 둔 손바닥은 절대 안 걸린다(계속 닿아 있으므로).
@@ -856,6 +858,7 @@ class QuireView extends TextFileView {
 
     this.drawSel(ctx);
     this.drawMap(ctx);
+    this.drawHold(ctx);
     this.drawRadial(ctx);
   }
 
@@ -906,6 +909,47 @@ class QuireView extends TextFileView {
   // 전에는 지우개 처리가 양쪽에 따로 적혀 있어 한쪽만 고치면 갈렸다.
   // 돌려주는 값이 true 면 「획이 아니다 — 여기서 끝」이다.
 
+  armLong(cx, cy) {
+    this.cancelLong();
+    this.longAt = [cx, cy];
+    this.longStart = Date.now();
+    this.longT = setTimeout(() => {
+      this.longT = 0;
+      const r = this.live.getBoundingClientRect();
+      this.openRadial(cx - r.left, cy - r.top);
+    }, LONG_MS);
+    this.schedule();
+  }
+
+  cancelLong() {
+    if (this.longT) { clearTimeout(this.longT); this.longT = 0; }
+    if (this.longAt) { this.longAt = null; this.schedule(); }
+  }
+
+  // 차오르는 링. 이게 없으면 언제 뜨는지 몰라 일찍 떼거나 오래 누른다.
+  // 링이 보이는 동안 펜을 움직이면 취소되므로, 「뜨겠다」 싶을 때 피할 수 있다.
+  drawHold(ctx) {
+    if (!this.longT || !this.longAt) return;
+    const r = this.live.getBoundingClientRect();
+    const cx = this.longAt[0] - r.left, cy = this.longAt[1] - r.top;
+    const p = Math.min(1, (Date.now() - this.longStart) / LONG_MS);
+    ctx.save();
+    ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    ctx.globalAlpha = Math.min(1, p * 2.6);      // 점 찍는 짧은 접촉에는 거의 안 보인다
+    ctx.strokeStyle = cssVar(this.wrap, '--background-modifier-border', '#8886');
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(cx, cy, 24, 0, 6.283);
+    ctx.stroke();
+    ctx.strokeStyle = cssVar(this.wrap, '--interactive-accent', '#4a8');
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.arc(cx, cy, 24, -Math.PI / 2, -Math.PI / 2 + 6.283 * p);
+    ctx.stroke();
+    ctx.restore();
+    this.schedule();          // 다 찰 때까지 계속 다시 그린다
+  }
+
   // 펜을 댄 채 손가락으로 톡 — 뗄 때 연다
   fingerTapDown(t) {
     this.tap = { id: t.identifier, at: Date.now(), x: t.clientX, y: t.clientY };
@@ -927,6 +971,7 @@ class QuireView extends TextFileView {
   beginPen(x, y, pr, cx, cy) {
     this.penPos = [cx, cy];
     if (this.radial) { this.radial.hit = null; return true; }   // 떠 있으면 다시 안 연다
+    this.armLong(cx, cy);
 
     if (this.tool === 'er') { this.snapshot(); this.erasing = true; this.eraseAt(x, y); return true; }
 
@@ -949,6 +994,11 @@ class QuireView extends TextFileView {
 
   movePen(x, y, cx, cy) {
     this.penPos = [cx, cy];
+    // 조금이라도 획을 그으려는 움직임이면 즉시 접는다
+    if (this.longT && this.longAt) {
+      const dx = cx - this.longAt[0], dy = cy - this.longAt[1];
+      if (dx * dx + dy * dy > LONG_SLOP * LONG_SLOP) this.cancelLong();
+    }
     if (this.radial) {
       const r = this.live.getBoundingClientRect();
       this.radial.hit = this.radialHit(cx - r.left, cy - r.top);
@@ -976,6 +1026,7 @@ class QuireView extends TextFileView {
   endPen() {
     this.penPos = null;
     this.tap = null;
+    this.cancelLong();
     if (this.radial) { this.closeRadial(true); return true; }
     if (this.erasing) { this.erasing = false; this.commitDoc(); return true; }
     if (this.drag) { this.dropDrag(); return true; }
@@ -1240,6 +1291,7 @@ class QuireView extends TextFileView {
       return;
     }
     // 그린 만큼은 살려서 굽고, 상태만 깨끗이 비운다
+    this.cancelLong();
     if (this.radial) this.closeRadial(false);
     if (this.drag) this.dropDrag();
     if (this.lasso) { this.lasso = null; this.needBake = true; }
