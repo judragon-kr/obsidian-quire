@@ -36,7 +36,8 @@ what you get is predictable. `Delete` removes the selection, `Escape` drops it.
 
 ## Straight lines — a mode, not a guess
 
-Toolbar cycles **📐 off → 📏 line → ⬡ shapes**.
+Two separate buttons, **📏 line** and **⬡ shapes**. Press one to turn it on, press it again
+to turn it off — no cycling through a state you did not want.
 
 **📏 line** is the one to use. Every stroke is a straight line, and it is straight *while
 you draw it* — no pause, no timer, nothing to wait for or trigger by accident. Draw, lift,

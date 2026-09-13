@@ -49,7 +49,6 @@ const GRIDS = ['off', 'dot', 'line'];
 //   line  **무조건 직선.** 긋는 동안 이미 직선이고 기다릴 것이 없다
 //   auto  멈추면 알아서 원·사각형·삼각형까지 (판정이 끼어드는 것이 싫으면 안 씀)
 const SHAPES = ['off', 'line', 'auto'];
-const SHAPE_ICON = { off: '📐', line: '📏', auto: '⬡' };
 const PALETTE = ['#2f6de0', '#e03131', '#2f9e44', '#f08c00', '#343a40', '#ffffff'];
 
 // v2 에서 images 가 붙었다. v1 파일은 images 가 없을 뿐 그대로 열린다 —
@@ -114,7 +113,7 @@ function detectShape(pts) {
   const w = maxx - minx, h = maxy - miny;
   const diag = Math.hypot(w, h) || 1;
   const gap = Math.hypot(x1 - x0, y1 - y0);
-  const closed = gap < diag * 0.28;
+  const closed = gap < diag * 0.34;   // 손으로 그리면 잘 안 닫힌다
 
   if (!closed) {
     // 직선인가 — 시작·끝을 잇는 선에서 얼마나 벗어나나
@@ -124,15 +123,16 @@ function detectShape(pts) {
       if (d > dev) dev = d;
     }
     const chord = Math.hypot(x1 - x0, y1 - y0);
-    if (chord > 0 && dev < chord * 0.09) return { kind: 'line', a: [x0, y0], b: [x1, y1] };
+    if (chord > 0 && dev < chord * 0.13) return { kind: 'line', a: [x0, y0], b: [x1, y1] };
     return null;
   }
 
   // 닫힌 것 — **꼭짓점을 먼저 센다.** 반지름 편차를 먼저 보면 사각형이 원으로 잡힌다
   // (100×80 사각형의 편차가 0.15 라 원 문턱과 겹쳤다).
-  const s = simplify(pts, diag * 0.06);
+  // 손으로 그리면 변이 흔들려 꼭짓점이 더 잡힌다. 6% 로는 사각형이 5~8각으로 나왔다.
+  const s = simplify(pts, diag * 0.11);
   let k = s.length / 3;
-  if (k > 3 && Math.hypot(s[0] - s[(k - 1) * 3], s[1] - s[(k - 1) * 3 + 1]) < diag * 0.12) k -= 1;
+  if (k > 3 && Math.hypot(s[0] - s[(k - 1) * 3], s[1] - s[(k - 1) * 3 + 1]) < diag * 0.16) k -= 1;
   if (k === 3) return { kind: 'poly', v: [[s[0], s[1]], [s[3], s[4]], [s[6], s[7]]] };
   if (k === 4) return { kind: 'rect', minx, miny, maxx, maxy };
 
@@ -150,7 +150,7 @@ function detectShape(pts) {
   let vr = 0;
   for (const r of rs) vr += (r - rm) * (r - rm);
   vr = Math.sqrt(vr / n) / (rm || 1);
-  if (vr < 0.16) return { kind: 'ellipse', cx, cy, rx: w / 2, ry: h / 2 };
+  if (vr < 0.22) return { kind: 'ellipse', cx, cy, rx: w / 2, ry: h / 2 };
   return null;
 }
 
@@ -565,13 +565,16 @@ class QuireView extends TextFileView {
     this.prBtn = btn('◐', 'Pressure sensitivity', () => this.setPressure(!this.pressure));
 
     bar.createSpan({ cls: 'quire-sep' });
-    this.gridBtn = btn('▦', 'Grid: off / dots / lines', () =>
-      this.setGrid(GRIDS[(GRIDS.indexOf(this.grid) + 1) % GRIDS.length]));
+    // 순환 버튼은 원하는 자리에 가려고 여러 번 눌러야 한다. 하나씩 나눠 둔다.
+    this.dotBtn = btn('▦', 'Dot grid', () => this.setGrid(this.grid === 'dot' ? 'off' : 'dot'));
+    this.lineBtn = btn('▤', 'Line grid', () => this.setGrid(this.grid === 'line' ? 'off' : 'line'));
     this.mapBtn = btn('🗺', 'Minimap', () => this.setMap(!this.map));
     this.palBtn = btn('🎛', 'Floating palette — drag it where your hand rests',
                       () => this.setPalette(!this.palOn));
-    this.shapeBtn = btn('📐', 'Straight lines: off / line / shapes', () =>
-      this.setShape(SHAPES[(SHAPES.indexOf(this.shape) + 1) % SHAPES.length]));
+    this.lineMBtn = btn('📏', 'Straight line mode — every stroke is a line',
+                        () => this.setShape(this.shape === 'line' ? 'off' : 'line'));
+    this.autoMBtn = btn('⬡', 'Shapes — draw, then pause without lifting',
+                        () => this.setShape(this.shape === 'auto' ? 'off' : 'auto'));
     btn('⊙', 'Fit to content', () => this.fit());
     btn('🐞', 'Toggle input diagnostics', () => {
       this.dbg = !this.dbg;
@@ -715,18 +718,20 @@ class QuireView extends TextFileView {
       d.toggleClass('is-on', Number(d.dataset.w) === this.width);
     }
     if (this.palBtn) this.palBtn.toggleClass('is-on', this.palOn);
-    if (this.shapeBtn) {
-      this.shapeBtn.toggleClass('is-on', this.shape !== 'off');
-      this.shapeBtn.setText(SHAPE_ICON[this.shape]);
-    }
+    if (this.lineMBtn) this.lineMBtn.toggleClass('is-on', this.shape === 'line');
+    if (this.autoMBtn) this.autoMBtn.toggleClass('is-on', this.shape === 'auto');
     if (this.pal) {
       for (const k in this.palTool) this.palTool[k].toggleClass('is-on', k === this.tool);
       for (const d of this.palW) d.toggleClass('is-on', Number(d.dataset.w) === this.width);
       for (const d of this.palC) d.toggleClass('is-on', d.dataset.color === this.color && this.tool !== 'er');
+      this.palLine.toggleClass('is-on', this.shape === 'line');
+      this.palAuto.toggleClass('is-on', this.shape === 'auto');
+      this.palUndo.toggleClass('is-off', this.undoStack.length === 0);
+      this.palRedo.toggleClass('is-off', this.redoStack.length === 0);
     }
     this.prBtn.toggleClass('is-on', this.pressure);
-    this.gridBtn.toggleClass('is-on', this.grid !== 'off');
-    this.gridBtn.setText(this.grid === 'line' ? '▤' : '▦');
+    this.dotBtn.toggleClass('is-on', this.grid === 'dot');
+    this.lineBtn.toggleClass('is-on', this.grid === 'line');
     this.mapBtn.toggleClass('is-on', this.map);
     this.undoBtn.toggleClass('is-off', this.undoStack.length === 0);
     this.redoBtn.toggleClass('is-off', this.redoStack.length === 0);
@@ -1609,6 +1614,16 @@ class QuireView extends TextFileView {
       b.onclick = () => this.setTool(k);
       this.palTool[k] = b;
     }
+
+    const modes = pal.createDiv({ cls: 'quire-prow' });
+    this.palLine = modes.createEl('button', { text: '📏', attr: { 'aria-label': 'Straight line mode', title: 'Straight line mode' } });
+    this.palLine.onclick = () => this.setShape(this.shape === 'line' ? 'off' : 'line');
+    this.palAuto = modes.createEl('button', { text: '⬡', attr: { 'aria-label': 'Shapes', title: 'Shapes — draw, then pause' } });
+    this.palAuto.onclick = () => this.setShape(this.shape === 'auto' ? 'off' : 'auto');
+    this.palUndo = modes.createEl('button', { text: '↩︎', attr: { 'aria-label': 'Undo', title: 'Undo' } });
+    this.palUndo.onclick = () => this.undo();
+    this.palRedo = modes.createEl('button', { text: '↪︎', attr: { 'aria-label': 'Redo', title: 'Redo' } });
+    this.palRedo.onclick = () => this.redo();
 
     const ws = pal.createDiv({ cls: 'quire-prow' });
     this.palW = [];

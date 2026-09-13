@@ -321,7 +321,7 @@ const p = new Quire();
   // ── J. 떠 있는 팔레트 ──────────────────────────────────
   ok(v.pal != null, '팔레트가 만들어진다');
   const prows = v.pal.children.filter(c => c.classes.has('quire-prow'));
-  ok(prows.length === 3, '줄이 셋이다 — 도구·굵기·색');
+  ok(prows.length === 4, '줄이 넷이다 — 도구·모드·굵기·색');
   ok(Object.keys(v.palTool).length === 4, '도구 4개');
   ok(v.palW.length === WIDTHS_N, '굵기 4개');
   ok(v.palC.length === PALETTE_N, '색 6개');
@@ -447,10 +447,44 @@ const p = new Quire();
 
   // 버튼이 지금 자리를 보여 준다
   v.setShape('line');
-  ok(v.shapeBtn._text === '📏', '버튼이 지금 모드를 보여 준다');
+  ok(v.lineMBtn.classes.has('is-on') && !v.autoMBtn.classes.has('is-on'), '📏 만 켜져 보인다');
   v.setShape('off');
-  ok(!v.shapeBtn.classes.has('is-on'), 'off 면 꺼져 보인다');
+  ok(!v.lineMBtn.classes.has('is-on') && !v.autoMBtn.classes.has('is-on'), 'off 면 둘 다 꺼져 보인다');
   v.cur = null; v.cancelShape();
+
+  // ── L. 흔들리는 손그림 — 합성 도형은 통과해도 실제로는 안 잡혔던 자리 ──
+  {
+    const src = require('fs').readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+    const pick = (name) => {
+      const i = src.indexOf('function ' + name);
+      let d = 0;
+      for (let k = src.indexOf('{', i); k < src.length; k++) {
+        if (src[k] === '{') d++;
+        else if (src[k] === '}') { d--; if (!d) return src.slice(i, k + 1); }
+      }
+    };
+    const F = new Function(pick('segDist') + pick('simplify') + pick('detectShape') + '; return detectShape;')();
+    let seed = 7;
+    const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff - 0.5; };
+    const noisy = (f, n, amp) => { const a = []; for (let i = 0; i <= n; i++) { const q = f(i / n); a.push(q[0] + rnd() * amp, q[1] + rnd() * amp, 1); } return a; };
+    const poly = (c, n, amp) => noisy((t) => {
+      const m = c.length - 1, s = Math.min(m - 1, Math.floor(t * m)), u = (t * m) % 1;
+      return [c[s][0] + (c[s + 1][0] - c[s][0]) * u, c[s][1] + (c[s + 1][1] - c[s][1]) * u];
+    }, n, amp);
+    const cases = [
+      ['원', noisy(t => [200 + Math.cos(t * 6.283) * 90, 200 + Math.sin(t * 6.283) * 80], 120, 9), 'ellipse'],
+      ['찌그러진 원', noisy(t => [200 + Math.cos(t * 6.283) * 90, 200 + Math.sin(t * 6.283) * 95], 120, 16), 'ellipse'],
+      ['사각형', poly([[0,0],[180,0],[180,120],[0,120],[0,0]], 140, 7), 'rect'],
+      ['삐뚠 사각형', poly([[0,4],[180,-6],[174,120],[6,126],[0,4]], 140, 12), 'rect'],
+      ['삼각형', poly([[0,120],[100,0],[200,120],[0,120]], 120, 8), 'poly'],
+      ['직선', noisy(t => [t * 300, 40 + t * 90], 60, 7), 'line'],
+      ['글씨(지그재그)', noisy(t => { const i = t * 7; return [i * 30, (i % 2 < 1 ? 0 : -30)]; }, 90, 4), null],
+    ];
+    for (const [nm, pts, want] of cases) {
+      const r = F(pts), got = r ? r.kind : null;
+      ok(got === want, `손그림 ${nm} → ${got}`);
+    }
+  }
 
   console.log(fail.length ? `\n✗ 실패 ${fail.length}건` : '\n○ 전부 통과');
   process.exit(fail.length ? 1 : 0);
