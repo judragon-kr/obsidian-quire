@@ -44,6 +44,12 @@ function roundRect(ctx, x, y, w, h, r) {
 }
 
 const GRIDS = ['off', 'dot', 'line'];
+// 도형 — 세 자리로 돈다.
+//   off   보통 필기
+//   line  **무조건 직선.** 긋는 동안 이미 직선이고 기다릴 것이 없다
+//   auto  멈추면 알아서 원·사각형·삼각형까지 (판정이 끼어드는 것이 싫으면 안 씀)
+const SHAPES = ['off', 'line', 'auto'];
+const SHAPE_ICON = { off: '📐', line: '📏', auto: '⬡' };
 const PALETTE = ['#2f6de0', '#e03131', '#2f9e44', '#f08c00', '#343a40', '#ffffff'];
 
 // v2 에서 images 가 붙었다. v1 파일은 images 가 없을 뿐 그대로 열린다 —
@@ -330,7 +336,7 @@ class QuireView extends TextFileView {
     this.grid = st.grid;
     this.map = st.map;
     this.palOn = st.palOn;
-    this.shapeOn = st.shapeOn;
+    this.shape = SHAPES.includes(st.shape) ? st.shape : 'off';
     this._bb = null;        // 내용 사각형 캐시. 획이 바뀌면 버린다
     this._pats = new Map();  // 격자 타일. 모드×간격×색×dpr 로 키를 잡는다
     this.undoStack = [];
@@ -564,8 +570,8 @@ class QuireView extends TextFileView {
     this.mapBtn = btn('🗺', 'Minimap', () => this.setMap(!this.map));
     this.palBtn = btn('🎛', 'Floating palette — drag it where your hand rests',
                       () => this.setPalette(!this.palOn));
-    this.shapeBtn = btn('📐', 'Shape snap — draw, then pause without lifting',
-                        () => this.setShape(!this.shapeOn));
+    this.shapeBtn = btn('📐', 'Straight lines: off / line / shapes', () =>
+      this.setShape(SHAPES[(SHAPES.indexOf(this.shape) + 1) % SHAPES.length]));
     btn('⊙', 'Fit to content', () => this.fit());
     btn('🐞', 'Toggle input diagnostics', () => {
       this.dbg = !this.dbg;
@@ -606,6 +612,11 @@ class QuireView extends TextFileView {
   // 그리는 중이던 획을 문서에 넣고 base 에 한 번만 굽는다. 전체 재굽기가 아니다.
   commitStroke() {
     if (!this.cur || this.cur.pts.length < 3) { this.cur = null; return; }
+    if (this.shape === 'line' && this.cur.pts.length >= 6) {
+      const sh = { kind: 'line', a: [this.cur.pts[0], this.cur.pts[1]],
+                   b: [this.cur.pts[3], this.cur.pts[4]] };
+      this.cur.pts = shapePts(sh, this.doc.view.k);
+    }
     this.snapshot();
     this.cur.bb = bboxOf(this.cur.pts, this.cur.w);
     this.doc.strokes.push(this.cur);
@@ -704,7 +715,10 @@ class QuireView extends TextFileView {
       d.toggleClass('is-on', Number(d.dataset.w) === this.width);
     }
     if (this.palBtn) this.palBtn.toggleClass('is-on', this.palOn);
-    if (this.shapeBtn) this.shapeBtn.toggleClass('is-on', this.shapeOn);
+    if (this.shapeBtn) {
+      this.shapeBtn.toggleClass('is-on', this.shape !== 'off');
+      this.shapeBtn.setText(SHAPE_ICON[this.shape]);
+    }
     if (this.pal) {
       for (const k in this.palTool) this.palTool[k].toggleClass('is-on', k === this.tool);
       for (const d of this.palW) d.toggleClass('is-on', Number(d.dataset.w) === this.width);
@@ -1077,7 +1091,7 @@ class QuireView extends TextFileView {
   // 긋다가 멈추면 도형으로 바꾼다. 움직이는 동안은 계속 미룬다.
   armShape() {
     this.cancelShape();
-    if (!this.shapeOn || !this.cur) return;
+    if (this.shape !== 'auto' || !this.cur) return;
     this.shapeT = setTimeout(() => { this.shapeT = 0; this.snapShape(); }, SHAPE_MS);
   }
 
@@ -1192,7 +1206,7 @@ class QuireView extends TextFileView {
       this.schedule();
       return true;
     }
-    if (this.cur && this.shapeOn) this.armShape();
+    if (this.cur && this.shape === 'auto') this.armShape();
     if (this.lasso) {
       const n = this.lasso.length;
       const dx = x - this.lasso[n - 2], dy = y - this.lasso[n - 1];
@@ -1312,6 +1326,8 @@ class QuireView extends TextFileView {
       this.cur.pts.push(x, y, pr);
     }
 
+    this.straighten();
+
     // 예측점은 live 에만 얹고 저장하지 않는다. 체감 지연이 줄어든다.
     this.pred = null;
     if (e.getPredictedEvents) {
@@ -1418,6 +1434,7 @@ class QuireView extends TextFileView {
         const dx = x - this.cur.pts[n - 3], dy = y - this.cur.pts[n - 2];
         const k = this.doc.view.k;
         if ((dx * dx + dy * dy) * k * k >= 0.36) this.cur.pts.push(x, y, pr);
+        this.straighten();
         this.schedule();
         return;
       }
@@ -1664,12 +1681,20 @@ class QuireView extends TextFileView {
     this.pal.style.top = ny + 'px';
   }
 
-  setShape(on) {
-    this.shapeOn = on;
-    this.plugin.settings.shapeOn = on;
+  setShape(m) {
+    this.shape = m;
+    this.plugin.settings.shape = m;
     this.plugin.queueSave();
-    if (!on) this.cancelShape();
+    if (m !== 'auto') this.cancelShape();
     this.refreshBar();
+  }
+
+  // line 모드 — 긋는 동안 첫 점과 지금 점만 남긴다. 결과가 아니라 과정이 직선이다.
+  straighten() {
+    const s = this.cur;
+    if (this.shape !== 'line' || !s || s.pts.length < 9) return;
+    const p = s.pts, n = p.length;
+    s.pts = [p[0], p[1], p[2], p[n - 3], p[n - 2], p[n - 1]];
   }
 
   setPalette(on) {
@@ -2037,7 +2062,7 @@ class ImageSearch extends Modal {
 }
 
 const DEFAULT_SETTINGS = { tool: 'pen', color: PALETTE[0], width: WIDTHS[1], pressure: true,
-                           grid: 'dot', map: true, palOn: true, palX: null, palY: null, shapeOn: true };
+                           grid: 'dot', map: true, palOn: true, palX: null, palY: null, shape: 'off' };
 
 module.exports = class Quire extends Plugin {
   async onload() {

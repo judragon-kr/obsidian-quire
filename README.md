@@ -34,30 +34,26 @@ Pick the **⬚** tool, draw a lasso around what you want, then drag it. Only thi
 **entirely inside** the lasso are picked up — partly-crossed strokes are left alone, so
 what you get is predictable. `Delete` removes the selection, `Escape` drops it.
 
-## Shape snap
+## Straight lines — a mode, not a guess
 
-Toolbar **📐**. Draw a line or a shape, then **pause without lifting the pen** — after
-600 ms it straightens.
+Toolbar cycles **📐 off → 📏 line → ⬡ shapes**.
 
-```
-line      straightened as drawn; only near-horizontal and near-vertical snap
-circle    from anything roughly round
-rectangle from four corners, axis-aligned
-triangle  from three corners
-```
+**📏 line** is the one to use. Every stroke is a straight line, and it is straight *while
+you draw it* — no pause, no timer, nothing to wait for or trigger by accident. Draw, lift,
+done.
 
-**Angles are left alone.** An early version snapped to 45° steps and that is wrong for
-maths — a slope carries meaning, and turning 43° into 45° draws a different claim.
-Horizontal and vertical do snap, within 4°, because axes are common; they snap by
-averaging the coordinate rather than rotating, so both ends stay where you put them.
+**⬡ shapes** is the older behaviour: draw, then pause without lifting, and it becomes a
+circle, rectangle or triangle. It is off by default because the trigger is a pause, and
+pausing with the pen down is what you do while thinking.
 
-**If it cannot tell what you drew it leaves the stroke alone.** Turning handwriting into a
-shape is not something you can undo by eye, so the detector refuses rather than guesses:
-strokes under 26 screen px are treated as writing, and anything that is neither clearly
-straight, round, nor a 3- or 4-cornered loop is left as it is.
+**Angles are left alone** in both. An early version snapped to 45° steps and that is wrong
+for maths — a slope carries meaning, and turning 43° into 45° draws a different claim.
+Horizontal and vertical snap within 4°, by averaging the coordinate rather than rotating,
+so both ends stay where you put them.
 
-The same pause opens the radial wheel when you have not drawn anything. Drawn something →
-shape; drawn nothing → wheel.
+In ⬡, if it cannot tell what you drew it leaves the stroke alone: strokes under 26 screen
+px are treated as writing, and anything neither clearly straight, round, nor a 3- or
+4-cornered loop is left as it is.
 
 ## Floating palette
 

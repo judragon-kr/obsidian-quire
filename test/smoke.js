@@ -410,12 +410,46 @@ const p = new Quire();
   v.snapShape();
   ok(!v.cur.snapped, '짧은 획은 안 건드린다');
 
-  // 끄면 시계가 안 돈다
-  v.setShape(false);
+  // ── line 모드 — 기다림 없이 긋는 동안 이미 직선 ──
+  v.setShape('line');
+  v.cur = { c:'#000', w:2, a:1, pts: mkpts(a=>{ for(let i=0;i<=20;i++) put(a, i*5, i*5+(i%3)-1); }) };
+  v.straighten();
+  ok(v.cur.pts.length === 6, '긋는 동안 점이 둘로 접힌다 — 이미 직선');
+  ok(v.cur.pts[0] === 0 && v.cur.pts[3] === 100, '첫 점과 지금 점만 남는다');
+  v.commitStroke();
+  {
+    const s = v.doc.strokes[v.doc.strokes.length-1];
+    ok(s.pts.length > 6, '확정할 때 선을 점으로 편다');
+    const n=s.pts.length/3;
+    const ang = Math.atan2(s.pts[(n-1)*3+1]-s.pts[1], s.pts[(n-1)*3]-s.pts[0]) * 180/Math.PI;
+    ok(Math.abs(ang - 45) > 0.2, 'line 모드도 각도는 안 돌린다 (' + ang.toFixed(1) + '도)');
+  }
+
+  // line 모드에서는 멈춤 판정이 안 돈다 — 기다릴 것이 없다
   v.cur = { c:'#000', w:2, a:1, pts:[0,0,1] };
   v.armShape();
-  ok(!v.shapeT, '꺼 두면 도형 시계가 안 돈다');
-  v.setShape(true);
+  ok(!v.shapeT, 'line 모드에서는 도형 시계가 안 돈다');
+
+  // off 면 아무것도 안 한다
+  v.setShape('off');
+  v.cur = { c:'#000', w:2, a:1, pts: mkpts(a=>{ for(let i=0;i<=20;i++) put(a, i*5, i*5+(i%3)-1); }) };
+  v.straighten();
+  ok(v.cur.pts.length > 6, 'off 면 손글씨가 그대로 남는다');
+  v.armShape();
+  ok(!v.shapeT, 'off 면 시계도 안 돈다');
+
+  // auto 에서만 멈춤 판정이 돈다
+  v.setShape('auto');
+  v.cur = { c:'#000', w:2, a:1, pts:[0,0,1] };
+  v.armShape();
+  ok(v.shapeT !== 0, 'auto 에서만 도형 시계가 돈다');
+  v.cancelShape();
+
+  // 버튼이 지금 자리를 보여 준다
+  v.setShape('line');
+  ok(v.shapeBtn._text === '📏', '버튼이 지금 모드를 보여 준다');
+  v.setShape('off');
+  ok(!v.shapeBtn.classes.has('is-on'), 'off 면 꺼져 보인다');
   v.cur = null; v.cancelShape();
 
   console.log(fail.length ? `\n✗ 실패 ${fail.length}건` : '\n○ 전부 통과');
