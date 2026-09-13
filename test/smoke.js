@@ -177,7 +177,7 @@ const p = new Quire();
   v.cur = null; v.useTouch = false;
 
   // ── H. v2 · 이미지 · 올가미 · 방사형 메뉴 ──────────────────
-  v.cancelLong(); v.radial = null; v.drag = null; v.lasso = null;
+  v.radial = null; v.drag = null; v.lasso = null;
 
   // v1 파일에 images 가 없어도 열려야 한다. 버전으로 거르면 옛 파일이 다 죽는다.
   v.setViewData(JSON.stringify({ v: 1, strokes: [{ c:'#000', w:2, a:1, pts:[0,0,1, 10,10,1] }] }));
@@ -267,21 +267,20 @@ const p = new Quire();
   v.onMove({ pointerType:'pen', buttons:1, clientX:40, clientY:40,
              preventDefault(){}, getCoalescedEvents(){ return []; } });
   ok(v.cur === null, 'sel 도구에서 자가 복구가 획을 안 만든다');
-  v.setTool('pen'); v.cancelLong(); v.lasso = null; v.drag = null;
+  v.setTool('pen'); v.lasso = null; v.drag = null;
 
   // ── I. 꾹 누르기 · 손가락 톡 ────────────────────────────
-  v.setViewData(''); v.setTool('pen'); v.cur=null; v.radial=null; v.tap=null; v.cancelLong();
+  v.setViewData(''); v.setTool('pen'); v.cur=null; v.radial=null; v.tap=null;
 
-  // 손떨림 정도로는 안 끊겨야 한다 — 420ms·9px 이던 때 실기기에서 안 뜬 자리
+  // 펜만으로는 안 열려야 한다 — 점 찍으려고 굴리면 메뉴가 뜨던 자리
   v.beginPen(0, 0, 1, 100, 100);
-  ok(v.longT !== 0, '펜을 대면 꾹 누르기 시계가 돈다');
-  v.movePen(0, 0, 108, 106);                       // 10px — 손떨림
-  ok(v.longT !== 0, '10px 흔들려도 안 끊긴다');
-  v.movePen(0, 0, 130, 130);                       // 42px — 획을 긋는 것
-  ok(v.longT === 0, '크게 움직이면 끊긴다');
+  v.movePen(0, 0, 104, 103);                       // 점 찍을 때의 미세한 굴림
+  ok(v.radial === null, '펜을 대고 굴려도 메뉴가 안 뜬다');
+  ok(v.cur !== null, '그 대신 획이 그어진다');
+  v.cur = null;
 
   // 손가락 톡 — 뗄 때 열린다. 얹어 둔 손바닥은 안 걸린다
-  v.cancelLong(); v.radial=null; v.tap=null;
+  v.radial=null; v.tap=null;
   v.penPos = [200, 150];
   v.fingerTapDown({ identifier: 7, clientX: 50, clientY: 50 });
   ok(v.tap !== null, '손가락이 닿으면 톡 후보로 잡는다');
@@ -305,7 +304,7 @@ const p = new Quire();
   v.tap=null; v.penPos=null;
   v.fingerTapDown({ identifier: 10, clientX: 50, clientY: 50 });
   ok(v.fingerTapUp({ identifier: 10, clientX: 50, clientY: 50 }) === false, '펜이 없으면 안 연다');
-  v.cancelLong(); v.radial=null; v.tap=null; v.cur=null;
+  v.radial=null; v.tap=null; v.cur=null;
 
   console.log(fail.length ? `\n✗ 실패 ${fail.length}건` : '\n○ 전부 통과');
   process.exit(fail.length ? 1 : 0);
