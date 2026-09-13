@@ -349,6 +349,55 @@ const p = new Quire();
   v.setPalette(true);
   ok(v.pal.style.display === 'flex', '다시 켜진다');
 
+  // ── K. 도형 보정 ───────────────────────────────────────
+  v.setViewData(''); v.setTool('pen'); v.radial=null; v.cancelLong();
+  const mkpts = (f) => { const a=[]; f(a); return a; };
+  const put = (a,x,y)=>a.push(x,y,1);
+
+  // 삐뚤한 직선 → 곧게. 45도에 가까우면 붙는다
+  v.cur = { c:'#000', w:2, a:1, pts: mkpts(a=>{ for(let i=0;i<=20;i++) put(a, i*5, i*5 + (i%3)-1); }) };
+  v.snapShape();
+  ok(v.cur.snapped === 'line', '삐뚤한 직선을 직선으로 봄');
+  {
+    const p0=v.cur.pts, n=p0.length/3;
+    const ang = Math.atan2(p0[(n-1)*3+1]-p0[1], p0[(n-1)*3]-p0[0]) * 180/Math.PI;
+    ok(Math.abs(ang - 45) < 0.5, '45도에 붙는다 (실측 ' + ang.toFixed(1) + '도)');
+  }
+
+  // 동그라미 → 원
+  v.cur = { c:'#000', w:2, a:1, pts: mkpts(a=>{
+    for(let i=0;i<=40;i++){ const t=i/40*6.283; put(a, 100+Math.cos(t)*50+(i%3), 100+Math.sin(t)*50-(i%2)); } }) };
+  v.snapShape();
+  ok(v.cur.snapped === 'ellipse', '동그라미를 원으로 봄');
+
+  // 네모 → 사각형
+  v.cur = { c:'#000', w:2, a:1, pts: mkpts(a=>{
+    const c=[[0,0],[100,3],[103,80],[-2,77],[0,0]];
+    for(let s=0;s<4;s++) for(let i=0;i<=10;i++){
+      const A=c[s],B=c[s+1]; put(a, A[0]+(B[0]-A[0])*i/10, A[1]+(B[1]-A[1])*i/10); } }) };
+  v.snapShape();
+  ok(v.cur.snapped === 'rect', '네모를 사각형으로 봄 (실제 ' + v.cur.snapped + ')');
+
+  // 글씨는 건드리면 안 된다 — 되돌릴 수 없다
+  v.cur = { c:'#000', w:2, a:1, pts: mkpts(a=>{
+    const s=[[0,0],[8,-14],[16,0],[24,-14],[32,0],[40,-14],[48,0],[30,6],[10,6]];
+    for(const [x,y] of s) put(a,x,y); }) };
+  v.snapShape();
+  ok(!v.cur.snapped, '알아볼 수 없으면 원래 획을 그대로 둔다');
+
+  // 짧은 획은 글씨로 본다
+  v.cur = { c:'#000', w:2, a:1, pts: mkpts(a=>{ for(let i=0;i<=6;i++) put(a, i, i); }) };
+  v.snapShape();
+  ok(!v.cur.snapped, '짧은 획은 안 건드린다');
+
+  // 끄면 시계가 안 돈다
+  v.setShape(false);
+  v.cur = { c:'#000', w:2, a:1, pts:[0,0,1] };
+  v.armShape();
+  ok(!v.shapeT, '꺼 두면 도형 시계가 안 돈다');
+  v.setShape(true);
+  v.cur = null; v.cancelShape();
+
   console.log(fail.length ? `\n✗ 실패 ${fail.length}건` : '\n○ 전부 통과');
   process.exit(fail.length ? 1 : 0);
 })().catch(e => { console.error('터짐:', e); process.exit(2); });

@@ -61,6 +61,131 @@ const LONG_SLOP = 14;   // 화면 px. 이보다 움직이면 획을 그으려는
 // 「뜰까 말까」 하는 것이 거슬린다. 획은 그전에 움직여 취소되므로 아예 안 보인다.
 const RING_FROM = 0.5;
 
+// 도형 보정 — 긋고 나서 떼지 않고 멈추면 반듯하게 바꾼다.
+// 「멈추면 메뉴」와 안 부딪힌다: 그은 것이 있으면 도형, 없으면 메뉴다.
+const SHAPE_MS = 600;    // 이만큼 멈춰 있으면 보정
+const SHAPE_MIN = 26;    // 화면 px. 이보다 짧은 획은 글씨로 본다
+const SNAP_DEG = 7;      // 0·45·90도에 이만큼 가까우면 붙인다
+
+// Douglas–Peucker. 꺾인 자리를 남기고 나머지를 버린다.
+function simplify(pts, tol) {
+  const n = pts.length / 3;
+  if (n < 3) return pts.slice();
+  const keep = new Uint8Array(n);
+  keep[0] = keep[n - 1] = 1;
+  const stack = [[0, n - 1]];
+  while (stack.length) {
+    const [a, b] = stack.pop();
+    let far = -1, fd = tol;
+    for (let i = a + 1; i < b; i++) {
+      const d = segDist(pts[i * 3], pts[i * 3 + 1],
+                        pts[a * 3], pts[a * 3 + 1], pts[b * 3], pts[b * 3 + 1]);
+      if (d > fd) { fd = d; far = i; }
+    }
+    if (far > 0) { keep[far] = 1; stack.push([a, far], [far, b]); }
+  }
+  const out = [];
+  for (let i = 0; i < n; i++) if (keep[i]) out.push(pts[i * 3], pts[i * 3 + 1], pts[i * 3 + 2]);
+  return out;
+}
+
+// 무엇을 그렸나. 못 알아보면 null 을 준다 — 그러면 원래 획을 그대로 둔다.
+function detectShape(pts) {
+  const n = pts.length / 3;
+  if (n < 4) return null;
+  const x0 = pts[0], y0 = pts[1], x1 = pts[(n - 1) * 3], y1 = pts[(n - 1) * 3 + 1];
+
+  let len = 0, minx = Infinity, miny = Infinity, maxx = -Infinity, maxy = -Infinity;
+  for (let i = 0; i < n; i++) {
+    const x = pts[i * 3], y = pts[i * 3 + 1];
+    if (x < minx) minx = x; if (x > maxx) maxx = x;
+    if (y < miny) miny = y; if (y > maxy) maxy = y;
+    if (i) len += Math.hypot(x - pts[(i - 1) * 3], y - pts[(i - 1) * 3 + 1]);
+  }
+  const w = maxx - minx, h = maxy - miny;
+  const diag = Math.hypot(w, h) || 1;
+  const gap = Math.hypot(x1 - x0, y1 - y0);
+  const closed = gap < diag * 0.28;
+
+  if (!closed) {
+    // 직선인가 — 시작·끝을 잇는 선에서 얼마나 벗어나나
+    let dev = 0;
+    for (let i = 1; i < n - 1; i++) {
+      const d = segDist(pts[i * 3], pts[i * 3 + 1], x0, y0, x1, y1);
+      if (d > dev) dev = d;
+    }
+    const chord = Math.hypot(x1 - x0, y1 - y0);
+    if (chord > 0 && dev < chord * 0.09) return { kind: 'line', a: [x0, y0], b: [x1, y1] };
+    return null;
+  }
+
+  // 닫힌 것 — **꼭짓점을 먼저 센다.** 반지름 편차를 먼저 보면 사각형이 원으로 잡힌다
+  // (100×80 사각형의 편차가 0.15 라 원 문턱과 겹쳤다).
+  const s = simplify(pts, diag * 0.06);
+  let k = s.length / 3;
+  if (k > 3 && Math.hypot(s[0] - s[(k - 1) * 3], s[1] - s[(k - 1) * 3 + 1]) < diag * 0.12) k -= 1;
+  if (k === 3) return { kind: 'poly', v: [[s[0], s[1]], [s[3], s[4]], [s[6], s[7]]] };
+  if (k === 4) return { kind: 'rect', minx, miny, maxx, maxy };
+
+  // 꼭짓점이 많으면 둥근 것이다. 반지름이 고른지 본다
+  let cx = 0, cy = 0;
+  for (let i = 0; i < n; i++) { cx += pts[i * 3]; cy += pts[i * 3 + 1]; }
+  cx /= n; cy /= n;
+  let rm = 0;
+  const rs = [];
+  for (let i = 0; i < n; i++) {
+    const r = Math.hypot(pts[i * 3] - cx, pts[i * 3 + 1] - cy);
+    rs.push(r); rm += r;
+  }
+  rm /= n;
+  let vr = 0;
+  for (const r of rs) vr += (r - rm) * (r - rm);
+  vr = Math.sqrt(vr / n) / (rm || 1);
+  if (vr < 0.16) return { kind: 'ellipse', cx, cy, rx: w / 2, ry: h / 2 };
+  return null;
+}
+
+// 도형을 다시 점으로 편다. 굵기 흐름은 평평하게 둔다 — 반듯한 선에 필압이 흔들리면 어색하다.
+function shapePts(sh, k) {
+  const out = [];
+  const push = (x, y) => out.push(x, y, 1);
+  if (sh.kind === 'line') {
+    let [ax, ay] = sh.a, [bx, by] = sh.b;
+    // 0·45·90도에 가까우면 붙인다
+    const ang = Math.atan2(by - ay, bx - ax);
+    const L = Math.hypot(bx - ax, by - ay);
+    const step = Math.PI / 4;
+    const snapped = Math.round(ang / step) * step;
+    if (Math.abs(ang - snapped) < SNAP_DEG * Math.PI / 180) {
+      bx = ax + Math.cos(snapped) * L;
+      by = ay + Math.sin(snapped) * L;
+    }
+    const N = Math.max(2, Math.min(64, Math.round(L * k / 6)));
+    for (let i = 0; i <= N; i++) push(ax + (bx - ax) * i / N, ay + (by - ay) * i / N);
+  } else if (sh.kind === 'ellipse') {
+    const N = 72;
+    for (let i = 0; i <= N; i++) {
+      const a = i / N * 6.283185;
+      push(sh.cx + Math.cos(a) * sh.rx, sh.cy + Math.sin(a) * sh.ry);
+    }
+  } else if (sh.kind === 'rect') {
+    const c = [[sh.minx, sh.miny], [sh.maxx, sh.miny], [sh.maxx, sh.maxy], [sh.minx, sh.maxy], [sh.minx, sh.miny]];
+    for (let i = 0; i < 4; i++) {
+      const [ax, ay] = c[i], [bx, by] = c[i + 1];
+      const N = Math.max(2, Math.min(48, Math.round(Math.hypot(bx - ax, by - ay) * k / 6)));
+      for (let j = 0; j <= N; j++) push(ax + (bx - ax) * j / N, ay + (by - ay) * j / N);
+    }
+  } else if (sh.kind === 'poly') {
+    const v = sh.v.concat([sh.v[0]]);
+    for (let i = 0; i < v.length - 1; i++) {
+      const [ax, ay] = v[i], [bx, by] = v[i + 1];
+      const N = Math.max(2, Math.min(48, Math.round(Math.hypot(bx - ax, by - ay) * k / 6)));
+      for (let j = 0; j <= N; j++) push(ax + (bx - ax) * j / N, ay + (by - ay) * j / N);
+    }
+  }
+  return out;
+}
+
 // 펜을 댄 채 손가락으로 톡 — 기다림 없이 메뉴를 연다.
 // 손가락을 **뗄 때** 열어서 화면에 얹어 둔 손바닥은 절대 안 걸린다(계속 닿아 있으므로).
 const TAP_MS = 320;     // 이 안에 떼야 톡으로 침
@@ -202,6 +327,7 @@ class QuireView extends TextFileView {
     this.grid = st.grid;
     this.map = st.map;
     this.palOn = st.palOn;
+    this.shapeOn = st.shapeOn;
     this._bb = null;        // 내용 사각형 캐시. 획이 바뀌면 버린다
     this._pats = new Map();  // 격자 타일. 모드×간격×색×dpr 로 키를 잡는다
     this.undoStack = [];
@@ -435,6 +561,8 @@ class QuireView extends TextFileView {
     this.mapBtn = btn('🗺', 'Minimap', () => this.setMap(!this.map));
     this.palBtn = btn('🎛', 'Floating palette — drag it where your hand rests',
                       () => this.setPalette(!this.palOn));
+    this.shapeBtn = btn('📐', 'Shape snap — draw, then pause without lifting',
+                        () => this.setShape(!this.shapeOn));
     btn('⊙', 'Fit to content', () => this.fit());
     btn('🐞', 'Toggle input diagnostics', () => {
       this.dbg = !this.dbg;
@@ -573,6 +701,7 @@ class QuireView extends TextFileView {
       d.toggleClass('is-on', Number(d.dataset.w) === this.width);
     }
     if (this.palBtn) this.palBtn.toggleClass('is-on', this.palOn);
+    if (this.shapeBtn) this.shapeBtn.toggleClass('is-on', this.shapeOn);
     if (this.pal) {
       for (const k in this.palTool) this.palTool[k].toggleClass('is-on', k === this.tool);
       for (const d of this.palW) d.toggleClass('is-on', Number(d.dataset.w) === this.width);
@@ -862,6 +991,19 @@ class QuireView extends TextFileView {
     this.drawSel(ctx);
     this.drawMap(ctx);
     this.drawHold(ctx);
+    if (this.snapAt && Date.now() - this.snapAt < 700 && this.cur) {
+      const bb = bboxOf(this.cur.pts, this.cur.w), v = this.doc.view, d = this.dpr;
+      ctx.save();
+      ctx.setTransform(d, 0, 0, d, 0, 0);
+      ctx.globalAlpha = 1 - (Date.now() - this.snapAt) / 700;
+      ctx.setLineDash([5, 4]);
+      ctx.strokeStyle = cssVar(this.wrap, '--interactive-accent', '#4a8');
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(bb[0] * v.k + v.x, bb[1] * v.k + v.y,
+                     (bb[2] - bb[0]) * v.k, (bb[3] - bb[1]) * v.k);
+      ctx.restore();
+      this.schedule();
+    }
     this.drawRadial(ctx);
   }
 
@@ -929,6 +1071,35 @@ class QuireView extends TextFileView {
     if (this.longAt) { this.longAt = null; this.schedule(); }
   }
 
+  // 긋다가 멈추면 도형으로 바꾼다. 움직이는 동안은 계속 미룬다.
+  armShape() {
+    this.cancelShape();
+    if (!this.shapeOn || !this.cur) return;
+    this.shapeT = setTimeout(() => { this.shapeT = 0; this.snapShape(); }, SHAPE_MS);
+  }
+
+  cancelShape() {
+    if (this.shapeT) { clearTimeout(this.shapeT); this.shapeT = 0; }
+  }
+
+  // 못 알아보면 아무것도 안 한다 — 글씨를 도형으로 바꿔 버리면 되돌릴 수 없다.
+  snapShape() {
+    const s = this.cur;
+    if (!s || s.pts.length < 12) return;
+    const k = this.doc.view.k;
+    let len = 0;
+    for (let i = 3; i < s.pts.length; i += 3) {
+      len += Math.hypot(s.pts[i] - s.pts[i - 3], s.pts[i + 1] - s.pts[i - 2]);
+    }
+    if (len * k < SHAPE_MIN) return;              // 짧으면 글씨로 본다
+    const sh = detectShape(s.pts);
+    if (!sh) return;
+    s.pts = shapePts(sh, k);
+    s.snapped = sh.kind;
+    this.snapAt = Date.now();
+    this.schedule();
+  }
+
   // 차오르는 링. 이게 없으면 언제 뜨는지 몰라 일찍 떼거나 오래 누른다.
   // 링이 보이는 동안 펜을 움직이면 취소되므로, 「뜨겠다」 싶을 때 피할 수 있다.
   drawHold(ctx) {
@@ -993,6 +1164,7 @@ class QuireView extends TextFileView {
     }
 
     this.cur = this.newStroke(x, y, pr);
+    this.armShape();
     this.schedule();
     return true;
   }
@@ -1017,6 +1189,7 @@ class QuireView extends TextFileView {
       this.schedule();
       return true;
     }
+    if (this.cur && this.shapeOn) this.armShape();
     if (this.lasso) {
       const n = this.lasso.length;
       const dx = x - this.lasso[n - 2], dy = y - this.lasso[n - 1];
@@ -1032,6 +1205,7 @@ class QuireView extends TextFileView {
     this.penPos = null;
     this.tap = null;
     this.cancelLong();
+    this.cancelShape();
     if (this.radial) { this.closeRadial(true); return true; }
     if (this.erasing) { this.erasing = false; this.commitDoc(); return true; }
     if (this.drag) { this.dropDrag(); return true; }
@@ -1297,6 +1471,7 @@ class QuireView extends TextFileView {
     }
     // 그린 만큼은 살려서 굽고, 상태만 깨끗이 비운다
     this.cancelLong();
+    this.cancelShape();
     if (this.radial) this.closeRadial(false);
     if (this.drag) this.dropDrag();
     if (this.lasso) { this.lasso = null; this.needBake = true; }
@@ -1484,6 +1659,14 @@ class QuireView extends TextFileView {
     const ny = Math.max(4, Math.min(y, Math.max(4, w.height - ph - 4)));
     this.pal.style.left = nx + 'px';
     this.pal.style.top = ny + 'px';
+  }
+
+  setShape(on) {
+    this.shapeOn = on;
+    this.plugin.settings.shapeOn = on;
+    this.plugin.queueSave();
+    if (!on) this.cancelShape();
+    this.refreshBar();
   }
 
   setPalette(on) {
@@ -1851,7 +2034,7 @@ class ImageSearch extends Modal {
 }
 
 const DEFAULT_SETTINGS = { tool: 'pen', color: PALETTE[0], width: WIDTHS[1], pressure: true,
-                           grid: 'dot', map: true, palOn: true, palX: null, palY: null };
+                           grid: 'dot', map: true, palOn: true, palX: null, palY: null, shapeOn: true };
 
 module.exports = class Quire extends Plugin {
   async onload() {

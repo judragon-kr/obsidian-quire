@@ -34,6 +34,26 @@ Pick the **⬚** tool, draw a lasso around what you want, then drag it. Only thi
 **entirely inside** the lasso are picked up — partly-crossed strokes are left alone, so
 what you get is predictable. `Delete` removes the selection, `Escape` drops it.
 
+## Shape snap
+
+Toolbar **📐**. Draw a line or a shape, then **pause without lifting the pen** — after
+600 ms it straightens.
+
+```
+line      snaps to 0° / 45° / 90° when within 7°
+circle    from anything roughly round
+rectangle from four corners, axis-aligned
+triangle  from three corners
+```
+
+**If it cannot tell what you drew it leaves the stroke alone.** Turning handwriting into a
+shape is not something you can undo by eye, so the detector refuses rather than guesses:
+strokes under 26 screen px are treated as writing, and anything that is neither clearly
+straight, round, nor a 3- or 4-cornered loop is left as it is.
+
+The same pause opens the radial wheel when you have not drawn anything. Drawn something →
+shape; drawn nothing → wheel.
+
 ## Floating palette
 
 Toolbar **🎛** shows a small palette on the canvas. Drag it by the grip to wherever your
