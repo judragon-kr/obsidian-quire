@@ -27,6 +27,47 @@ delayed or withheld while the system decides whether the contact is a gesture.
 enclosing element keeps a scroll recognizer armed. Pointer Events are still used on
 desktop.
 
+
+## Select and move
+
+Pick the **⬚** tool, draw a lasso around what you want, then drag it. Only things
+**entirely inside** the lasso are picked up — partly-crossed strokes are left alone, so
+what you get is predictable. `Delete` removes the selection, `Escape` drops it.
+
+## Radial menu — hold the pen down
+
+Apple Pencil's double-tap and squeeze are not handed to web views by WebKit, so a plugin
+cannot read them. Holding the pen still for a moment does the same job: a wheel opens
+where the pen is. Inner ring picks the tool, outer ring picks colour and width. Slide onto
+one and lift. Lift in the middle, or well outside, to cancel.
+
+## Images
+
+Toolbar **🖼** inserts from a file, and paste or drag-and-drop work too. Images sit under
+the ink, and the lasso moves them like anything else.
+
+The picture itself goes into the vault as an attachment and the board stores the path,
+not the bytes. Embedding the data would push a board into tens of megabytes and copy all
+of it into every undo step.
+
+## Image search
+
+Toolbar **🔍** searches [Openverse](https://openverse.org) — no API key, and everything
+returned is Creative Commons or public domain. The credit line is stored with the image
+and drawn beneath it, because attribution is a condition of those licences.
+
+Google and Bing image search need a paid key and tell you nothing about whether you may
+use the result, so they are not offered.
+
+## File format
+
+```
+{ "v": 2, "strokes": [ … ], "images": [ { "id", "src", "x", "y", "w", "h", "attr" } ], "view": { … } }
+```
+
+Boards written by earlier versions have no `images` key. They open unchanged — the key is
+filled in with an empty list rather than the file being refused.
+
 ## What it does
 
 - Infinite canvas — two-finger pan and pinch zoom, wheel and ⌘-wheel on desktop

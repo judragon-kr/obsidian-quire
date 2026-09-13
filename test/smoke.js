@@ -175,6 +175,99 @@ const p = new Quire();
   ok(v.cur.pts[0] === 10, 'Touch 경로가 켜지면 Pointer 쪽 펜은 무시된다');
   v.cur = null; v.useTouch = false;
 
+  // ── H. v2 · 이미지 · 올가미 · 방사형 메뉴 ──────────────────
+  v.cancelLong(); v.radial = null; v.drag = null; v.lasso = null;
+
+  // v1 파일에 images 가 없어도 열려야 한다. 버전으로 거르면 옛 파일이 다 죽는다.
+  v.setViewData(JSON.stringify({ v: 1, strokes: [{ c:'#000', w:2, a:1, pts:[0,0,1, 10,10,1] }] }));
+  ok(v.doc.strokes.length === 1, 'v1 파일이 그대로 열린다');
+  ok(Array.isArray(v.doc.images) && v.doc.images.length === 0, 'images 가 빈 배열로 채워진다');
+  ok(v.readonly === false, 'v1 이라고 readonly 로 안 잠근다');
+  ok(Array.isArray(JSON.parse(v.getViewData()).images), '저장할 때도 images 가 나간다');
+
+  v.setViewData('');
+  v.placeImage('att/a.png', 400, 300);
+  ok(v.doc.images.length === 1, '이미지가 문서에 들어간다');
+  const im0 = v.doc.images[0];
+  ok(im0.w <= 400 && im0.h <= 300, '화면 절반을 안 넘게 줄인다');
+  ok(Math.abs(im0.w / im0.h - 4 / 3) < 0.01, '가로세로비가 유지된다');
+  v.undo(); ok(v.doc.images.length === 0, 'undo 가 이미지도 되돌린다');
+  v.redo(); ok(v.doc.images.length === 1, 'redo 도 이미지를 되살린다');
+
+  // 올가미 — 완전히 안에 든 것만. 걸친 것은 안 잡힌다.
+  v.setViewData('');
+  v.doc.strokes = [
+    { c:'#000', w:2, a:1, pts:[10,10,1, 20,20,1], bb:[6,6,24,24] },    // 안
+    { c:'#000', w:2, a:1, pts:[10,10,1, 90,90,1], bb:[6,6,94,94] },    // 걸침
+    { c:'#000', w:2, a:1, pts:[80,80,1, 90,90,1], bb:[76,76,94,94] },  // 밖
+  ];
+  v.lasso = [0,0, 50,0, 50,50, 0,50];
+  v.selectByLasso();
+  ok(v.sel.s.size === 1 && v.sel.s.has(0), '완전히 안에 든 획만 골라진다');
+  ok(v.lasso === null, '고르고 나면 올가미 자취는 지워진다');
+
+  // 이동 — 이력이 같이 움직이면 안 된다 (얕은 복사 함정)
+  v.setViewData('');
+  v.doc.strokes = [{ c:'#000', w:2, a:1, pts:[10,10,1, 20,20,1], bb:[6,6,24,24] }];
+  v.sel.s.add(0);
+  v.drag = { ox:0, oy:0, dx:100, dy:50 };
+  v.dropDrag();
+  ok(v.doc.strokes[0].pts[0] === 110, '획이 실제로 옮겨진다');
+  ok(v.doc.strokes[0].bb[0] > 100, 'bb 가 다시 계산된다');
+  v.undo();
+  ok(v.doc.strokes[0].pts[0] === 10, 'undo 가 이동 전 좌표를 돌려준다');
+
+  v.setViewData('');
+  v.doc.strokes = [{ c:'#000', w:2, a:1, pts:[10,10,1], bb:[6,6,14,14] }];
+  v.doc.images = [{ id:'x', src:'a.png', x:0, y:0, w:10, h:10 }];
+  v.sel.s.add(0); v.sel.i.add(0);
+  v.deleteSel();
+  ok(v.doc.strokes.length === 0 && v.doc.images.length === 0, 'Delete 가 획과 이미지를 지운다');
+  ok(v.hasSel === false, '지운 뒤 선택이 비워진다');
+  v.undo();
+  ok(v.doc.strokes.length + v.doc.images.length === 2, 'undo 가 둘 다 되살린다');
+  ok(v.hasSel === false, '되돌린 뒤에도 선택은 안 살아난다 — 없어진 획을 가리키면 안 된다');
+
+  // 방사형 메뉴 — 가운데는 취소, 안 고리는 도구, 바깥 고리는 색·굵기
+  v.setViewData('');
+  v.openRadial(200, 200);
+  ok(v.radial !== null, '메뉴가 열린다');
+  ok(v.radialHit(200, 200) === null, '가운데는 아무것도 아니다');
+  ok(v.radialHit(200, 400) === null, '너무 바깥은 취소다');
+  const hIn = v.radialHit(200, 150), hOut = v.radialHit(200, 105);
+  ok(hIn && hIn.k === 'tool', '안 고리는 도구다');
+  ok(hOut && (hOut.k === 'color' || hOut.k === 'width'), '바깥 고리는 색이나 굵기다');
+  v.radial.hit = { k:'width', v:7 };
+  v.closeRadial(true);
+  ok(v.width === 7 && v.radial === null, '떼면 고른 것이 적용되고 메뉴가 닫힌다');
+  v.openRadial(100, 100);
+  v.radial.hit = { k:'width', v:1.2 };
+  v.closeRadial(false);
+  ok(v.width === 7, '취소하면 적용 안 된다');
+
+  // 지우개로 누른 채 메뉴가 뜨면 erasing 이 남아 그 뒤로 획이 계속 지워진다
+  v.setViewData('');
+  v.setTool('er');
+  v.beginPen(5, 5, 1, 5, 5);
+  ok(v.erasing === true, '지우개는 누르는 순간 켜진다');
+  v.openRadial(60, 60);
+  ok(v.erasing === false, '메뉴가 뜨면 지우개가 꺼진다');
+  v.closeRadial(false);
+  v.setTool('pen');
+
+  // 메뉴가 열리면 그리던 획은 버린다. 안 버리면 여는 동작이 점 하나로 남는다.
+  v.cur = { c:'#000', w:2, a:1, pts:[1,1,1] };
+  v.openRadial(50, 50);
+  ok(v.cur === null, '메뉴가 열리면 그리던 획이 버려진다');
+  v.closeRadial(false);
+
+  // sel 도구에서는 자가 복구가 획을 만들면 안 된다
+  v.setTool('sel'); v.cur = null; v.useTouch = false;
+  v.onMove({ pointerType:'pen', buttons:1, clientX:40, clientY:40,
+             preventDefault(){}, getCoalescedEvents(){ return []; } });
+  ok(v.cur === null, 'sel 도구에서 자가 복구가 획을 안 만든다');
+  v.setTool('pen'); v.cancelLong(); v.lasso = null; v.drag = null;
+
   console.log(fail.length ? `\n✗ 실패 ${fail.length}건` : '\n○ 전부 통과');
   process.exit(fail.length ? 1 : 0);
 })().catch(e => { console.error('터짐:', e); process.exit(2); });

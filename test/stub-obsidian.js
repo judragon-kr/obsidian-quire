@@ -1,9 +1,26 @@
 class Notice { constructor(m){ Notice.last = m; } }
+// 이미지 검색 모달이 이걸 상속한다
+class Modal {
+  constructor(app){ this.app = app; this.contentEl = mkEl('div'); this.opened = false; }
+  open(){ this.opened = true; if (this.onOpen) this.onOpen(); }
+  close(){ this.opened = false; if (this.onClose) this.onClose(); }
+}
+// 네트워크는 시험에서 안 탄다. 부르면 세어 두고 빈 결과를 준다.
+const REQ = { calls: [], next: null };
+async function requestUrl(o){
+  REQ.calls.push(o);
+  return REQ.next || { status: 200, json: { results: [] }, arrayBuffer: new ArrayBuffer(0) };
+}
 class Plugin {
   constructor(){ this.views={}; this._data=null;
     this.app = { workspace: { on(){ return {}; }, getActiveFile(){ return null; },
                               getLeaf(){ return { openFile: async()=>{} }; } },
-                 vault: { getAbstractFileByPath(){ return null; }, create: async()=>({}) } }; }
+                 scope: {},
+                 fileManager: { getAvailablePathForAttachment: async (n)=>`att/${n}` },
+                 vault: { getAbstractFileByPath(){ return null; },
+                          getResourcePath(f){ return 'app://' + (f && f.path || ''); },
+                          create: async()=>({}),
+                          createBinary: async (path)=>({ path }) } }; }
   registerView(t,f){ this.views[t]=f; }
   registerExtensions(){} addRibbonIcon(){} addCommand(){} registerEvent(){}
   async loadData(){ return this._data; }
@@ -30,6 +47,8 @@ function mkEl(tag){
     appendChild(c){ this.children.push(c); return c; },
     toggleClass(c,on){ on ? this.classes.add(c) : this.classes.delete(c); },
     setText(s){ this._text = s; },
+    setAttr(k,v){ this.dataset[k] = v; },
+    focus(){},
     getBoundingClientRect(){ return {left:0,top:0,right:800,bottom:600,width:800,height:600}; },
     addEventListener(){}, removeEventListener(){},
     getContext(){ return CTX; },
@@ -68,4 +87,11 @@ const TILE = new Proxy({}, {
 });
 CTX.createPattern = (c, rep) => { CALLS.createPattern = (CALLS.createPattern||0)+1; return { __pat: rep }; };
 
-module.exports = { Notice, Plugin, TextFileView, ItemView, Menu, __mkEl: mkEl, __ctx: CTX };
+// 이미지 요소. 시험에서는 절대 실리지 않으므로 placeholder 경로가 돈다.
+global.Image = global.Image || class { constructor(){ this.complete=false; this.naturalWidth=0; } };
+global.window = global.window || { setTimeout: (f,ms)=>setTimeout(f,ms), clearTimeout: (h)=>clearTimeout(h),
+                                   devicePixelRatio: 2, addEventListener(){}, removeEventListener(){} };
+if (!global.window.setTimeout) global.window.setTimeout = (f,ms)=>setTimeout(f,ms);
+
+module.exports = { Notice, Plugin, TextFileView, ItemView, Menu, Modal, requestUrl,
+                   __mkEl: mkEl, __ctx: CTX, __req: REQ };

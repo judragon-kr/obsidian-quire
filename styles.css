@@ -52,3 +52,16 @@
 
 /* 되돌릴 것이 없으면 눌러도 소용없다는 것을 보여 준다 */
 .quire-bar button.is-off { opacity: .35; }
+
+/* ── 이미지 검색 ── */
+.quire-search .quire-hint { color: var(--text-muted); font-size: 12px; margin: 4px 0 10px; }
+.quire-srow { display: flex; gap: 8px; margin-bottom: 10px; }
+.quire-srow input { flex: 1; }
+.quire-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 8px; max-height: 52vh; overflow-y: auto; }
+.quire-card { cursor: pointer; border: 1px solid var(--background-modifier-border);
+  border-radius: 6px; overflow: hidden; background: var(--background-secondary); }
+.quire-card:hover { border-color: var(--interactive-accent); }
+.quire-card img { width: 100%; height: 92px; object-fit: cover; display: block; }
+.quire-cap { font-size: 10px; color: var(--text-muted); padding: 3px 5px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

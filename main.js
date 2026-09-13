@@ -19,7 +19,7 @@
  * 좌표는 화면이 아니라 **월드 좌표**로 둔다 — 확대·이동해도 획이 안 흔들린다.
  */
 
-const { TextFileView, Plugin, Notice } = require('obsidian');
+const { TextFileView, Plugin, Notice, Modal, requestUrl } = require('obsidian');
 
 const VIEW_TYPE = 'quire';
 const EXT = 'quire';
@@ -44,8 +44,25 @@ function roundRect(ctx, x, y, w, h, r) {
 }
 
 const GRIDS = ['off', 'dot', 'line'];
-const PALETTE = ['#2f6de0', '#e03131', '#2f9e44', '#f08c00', '#343a40'];
-const DEFAULT = () => ({ v: 1, strokes: [], view: { x: 0, y: 0, k: 1 } });
+const PALETTE = ['#2f6de0', '#e03131', '#2f9e44', '#f08c00', '#343a40', '#ffffff'];
+
+// v2 에서 images 가 붙었다. v1 파일은 images 가 없을 뿐 그대로 열린다 —
+// setViewData 가 없으면 빈 배열을 넣는다. 버전을 올렸다고 옛 파일을 거르지 않는다.
+const DEFAULT = () => ({ v: 2, strokes: [], images: [], view: { x: 0, y: 0, k: 1 } });
+
+const LONG_MS = 420;    // 이만큼 안 움직이고 누르면 방사형 메뉴
+const LONG_SLOP = 9;    // 화면 px. 이보다 움직이면 그냥 획이다
+
+// 다각형 안에 있나 — 광선 투사. 올가미가 이걸로 획을 고른다.
+function pointInPoly(px, py, poly) {
+  let inside = false;
+  for (let i = 0, j = poly.length - 2; i < poly.length; j = i, i += 2) {
+    const xi = poly[i], yi = poly[i + 1], xj = poly[j], yj = poly[j + 1];
+    if ((yi > py) !== (yj > py) &&
+        px < ((xj - xi) * (py - yi)) / ((yj - yi) || 1e-9) + xi) inside = !inside;
+  }
+  return inside;
+}
 
 // ── 획 하나 ────────────────────────────────────────────────
 // pts 는 [x, y, pressure, x, y, pressure, …] 로 납작하게 둔다.
@@ -123,6 +140,33 @@ function drawStroke(ctx, s, k) {
 }
 
 
+// 이미지 한 장. el 이 아직 안 실렸으면 자리만 표시한다 —
+// 빈 곳으로 두면 「안 들어갔다」로 보이고, 실린 뒤 다시 굽는다.
+function drawImage(ctx, im, el) {
+  if (el && el.complete && el.naturalWidth) {
+    ctx.drawImage(el, im.x, im.y, im.w, im.h);
+  } else {
+    ctx.save();
+    ctx.setLineDash([6, 5]);
+    ctx.strokeStyle = '#8888';
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(im.x, im.y, im.w, im.h);
+    ctx.restore();
+  }
+  // 출처. Openverse 에서 가져온 것은 라이선스가 따라와야 한다.
+  if (im.attr) {
+    ctx.save();
+    ctx.globalAlpha = 0.75;
+    ctx.fillStyle = '#888';
+    const fs = Math.max(6, Math.min(14, im.w / 26));
+    ctx.font = `${fs}px sans-serif`;
+    ctx.fillText(im.attr, im.x, im.y + im.h + fs * 1.25, im.w);
+    ctx.restore();
+  }
+}
+
+function imgBB(im) { return [im.x, im.y, im.x + im.w, im.y + im.h]; }
+
 function segDist(px, py, ax, ay, bx, by) {
   const dx = bx - ax, dy = by - ay;
   const L = dx * dx + dy * dy;
@@ -153,6 +197,23 @@ class QuireView extends TextFileView {
     this.raf = 0;
     this.touches = new Map();   // 손가락만. 펜은 절대 여기 안 들어간다
     this.pinch = null;
+    this.sel = { s: new Set(), i: new Set() };  // 고른 획·이미지 인덱스
+    this.lasso = null;        // 올가미를 그리는 중이면 [x,y,…]
+    this.drag = null;         // 고른 것을 끄는 중이면 {ox,oy,dx,dy}
+    this._img = new Map();    // src → HTMLImageElement. 비동기로 실린다
+    this.radial = null;       // 방사형 메뉴가 떠 있으면 {cx,cy,hit}
+    this.longT = 0;
+  }
+
+  get hasSel() { return this.sel.s.size > 0 || this.sel.i.size > 0; }
+
+  clearSel() {
+    if (!this.hasSel && !this.lasso) return;
+    this.sel.s.clear(); this.sel.i.clear();
+    this.lasso = null;
+    this.drag = null;
+    this.needBake = true;
+    this.schedule();
   }
 
   getViewType() { return VIEW_TYPE; }
@@ -180,11 +241,16 @@ class QuireView extends TextFileView {
     }
     this._bb = null;
     if (!this.doc.view) this.doc.view = { x: 0, y: 0, k: 1 };
+    // v1 파일에는 images 가 없다. 없다고 거르지 않고 빈 배열을 준다.
+    if (!Array.isArray(this.doc.images)) this.doc.images = [];
+    this.sel.s.clear(); this.sel.i.clear();
+    this.lasso = null; this.drag = null; this.radial = null;
     this.needBake = true;
     this.resize();
   }
 
-  clear() { this.doc = DEFAULT(); this._bb = null; this.needBake = true; this.resetHistory(); }
+  clear() { this.doc = DEFAULT(); this._bb = null; this.needBake = true;
+           this.sel.s.clear(); this.sel.i.clear(); this.resetHistory(); }
 
   resetHistory() {
     this.undoStack = [];
@@ -235,6 +301,42 @@ class QuireView extends TextFileView {
     window.addEventListener('pointercancel', this.winCancel);
     this.live.addEventListener('wheel', this.onWheel, { passive: false });
 
+    // 붙여넣기 · 끌어다 놓기로도 이미지가 들어온다
+    this.onPaste = (e) => {
+      const items = e.clipboardData && e.clipboardData.items;
+      if (!items) return;
+      for (const it of items) {
+        if (it.type && it.type.startsWith('image/')) {
+          const f = it.getAsFile();
+          if (!f) continue;
+          e.preventDefault();
+          f.arrayBuffer().then((b) => this.addFromBlob(f.name || `pasted.${it.type.split('/')[1]}`, b));
+          return;
+        }
+      }
+    };
+    this.onDrop = (e) => {
+      const fs = e.dataTransfer && e.dataTransfer.files;
+      if (!fs || !fs.length) return;
+      e.preventDefault();
+      for (const f of fs) {
+        if (f.type && f.type.startsWith('image/')) f.arrayBuffer().then((b) => this.addFromBlob(f.name, b));
+      }
+    };
+    this.onDragOver = (e) => { if (e.dataTransfer) e.preventDefault(); };
+    // Delete 로 고른 것을 지운다. Escape 로 선택·메뉴를 접는다.
+    this.onKey = (e) => {
+      if (!this.hasSel && !this.radial) return;
+      if (e.key === 'Escape') { this.closeRadial(false); this.clearSel(); e.preventDefault(); }
+      else if ((e.key === 'Delete' || e.key === 'Backspace') && this.hasSel) {
+        this.deleteSel(); e.preventDefault();
+      }
+    };
+    root.addEventListener('paste', this.onPaste);
+    this.wrap.addEventListener('drop', this.onDrop);
+    this.wrap.addEventListener('dragover', this.onDragOver);
+    window.addEventListener('keydown', this.onKey);
+
     this.ro = new ResizeObserver(() => this.resize());
     this.ro.observe(this.wrap);
     this.resize();
@@ -251,6 +353,13 @@ class QuireView extends TextFileView {
     window.removeEventListener('pointermove', this.winMove);
     window.removeEventListener('pointerup', this.winUp);
     window.removeEventListener('pointercancel', this.winCancel);
+    window.removeEventListener('keydown', this.onKey);
+    if (this.contentEl) this.contentEl.removeEventListener('paste', this.onPaste);
+    if (this.wrap) {
+      this.wrap.removeEventListener('drop', this.onDrop);
+      this.wrap.removeEventListener('dragover', this.onDragOver);
+    }
+    this.cancelLong();
   }
 
   buildToolbar(root) {
@@ -264,6 +373,11 @@ class QuireView extends TextFileView {
     this.penBtn = btn('✏️', 'Pen', () => this.setTool('pen'), 'pen');
     this.hlBtn = btn('🖍', 'Highlighter', () => this.setTool('hl'), 'hl');
     this.erBtn = btn('🩹', 'Eraser (whole stroke)', () => this.setTool('er'), 'er');
+    this.selBtn = btn('⬚', 'Select — lasso, then drag to move', () => this.setTool('sel'), 'sel');
+
+    bar.createSpan({ cls: 'quire-sep' });
+    btn('🖼', 'Insert image from this vault or your device', () => this.pickImage());
+    btn('🔍', 'Search Openverse for an image', () => new ImageSearch(this.app, this).open());
 
     bar.createSpan({ cls: 'quire-sep' });
     this.undoBtn = btn('↩︎', 'Undo', () => this.undo());
@@ -357,17 +471,23 @@ class QuireView extends TextFileView {
   }
 
   // 획 배열은 확정 뒤 안 바뀌므로 얕은 복사면 된다.
+  // 이동은 획 안의 pts 를 고치므로 그때만 깊은 복사를 쓴다(아래 dropDrag).
   snapshot() {
-    this.undoStack.push(this.doc.strokes.slice());
+    this.undoStack.push({ s: this.doc.strokes.slice(), i: this.doc.images.slice() });
     if (this.undoStack.length > 60) this.undoStack.shift();
     this.redoStack.length = 0;
     this.refreshBar();
   }
 
-  undo() {
-    if (!this.undoStack.length) return;
-    this.redoStack.push(this.doc.strokes.slice());
-    this.doc.strokes = this.undoStack.pop();
+  // 되돌리기가 선택을 살려 두면 없어진 획을 가리키게 된다. 항상 비운다.
+  _restore(from, to) {
+    if (!from.length) return;
+    to.push({ s: this.doc.strokes.slice(), i: this.doc.images.slice() });
+    const st = from.pop();
+    this.doc.strokes = st.s;
+    this.doc.images = st.i;
+    this.sel.s.clear(); this.sel.i.clear();
+    this.drag = null; this.lasso = null;
     this._bb = null;
     this.needBake = true;
     this.schedule();
@@ -375,16 +495,8 @@ class QuireView extends TextFileView {
     this.refreshBar();
   }
 
-  redo() {
-    if (!this.redoStack.length) return;
-    this.undoStack.push(this.doc.strokes.slice());
-    this.doc.strokes = this.redoStack.pop();
-    this._bb = null;
-    this.needBake = true;
-    this.schedule();
-    this.commitDoc();
-    this.refreshBar();
-  }
+  undo() { this._restore(this.undoStack, this.redoStack); }
+  redo() { this._restore(this.redoStack, this.undoStack); }
 
   setTool(t) {
     this.tool = t;
@@ -436,7 +548,7 @@ class QuireView extends TextFileView {
   // 색·굵기가 눌려도 아무 표시가 없던 것이 여기 없어서였다.
   refreshBar() {
     if (!this.penBtn) return;
-    for (const b of [this.penBtn, this.hlBtn, this.erBtn]) {
+    for (const b of [this.penBtn, this.hlBtn, this.erBtn, this.selBtn]) {
       b.toggleClass('is-on', b.dataset.tool === this.tool);
     }
     for (const d of this.swEls) {
@@ -508,8 +620,17 @@ class QuireView extends TextFileView {
     const vx1 = (r.width - v.x) / v.k, vy1 = (r.height - v.y) / v.k;
 
     let drawn = 0;
-    for (const s of this.doc.strokes) {
-      const b = s.bb;
+    // 이미지가 먼저. 획이 그 위에 얹힌다 — 그림에 주석을 다는 쓰임이라 이 순서다.
+    for (let i = 0; i < this.doc.images.length; i++) {
+      if (this.drag && this.sel.i.has(i)) continue;   // 끄는 중이면 live 가 맡는다
+      const im = this.doc.images[i], b = imgBB(im);
+      if (b[2] < vx0 || b[0] > vx1 || b[3] < vy0 || b[1] > vy1) continue;
+      drawImage(ctx, im, this.imgFor(im));
+      drawn++;
+    }
+    for (let i = 0; i < this.doc.strokes.length; i++) {
+      if (this.drag && this.sel.s.has(i)) continue;
+      const s = this.doc.strokes[i], b = s.bb;
       if (b && (b[2] < vx0 || b[0] > vx1 || b[3] < vy0 || b[1] > vy1)) continue;
       drawStroke(ctx, s, v.k);
       drawn++;
@@ -597,17 +718,39 @@ class QuireView extends TextFileView {
   // 획 전체를 감싸는 사각형. 미니맵이 매 프레임 쓰므로 캐시한다.
   contentBB() {
     if (this._bb) return this._bb;
-    const ss = this.doc.strokes;
-    if (!ss.length) return (this._bb = null);
+    const ss = this.doc.strokes, ims = this.doc.images;
+    if (!ss.length && !ims.length) return (this._bb = null);
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-    for (const s of ss) {
-      const b = s.bb || bboxOf(s.pts, s.w);
+    const eat = (b) => {
       if (b[0] < x0) x0 = b[0];
       if (b[1] < y0) y0 = b[1];
       if (b[2] > x1) x1 = b[2];
       if (b[3] > y1) y1 = b[3];
-    }
+    };
+    for (const s of ss) eat(s.bb || bboxOf(s.pts, s.w));
+    for (const im of ims) eat(imgBB(im));
     return (this._bb = [x0, y0, x1, y1]);
+  }
+
+  // 선택 전체를 감싸는 사각형(world). 없으면 null.
+  selBB() {
+    if (!this.hasSel) return null;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    const eat = (b) => {
+      if (b[0] < x0) x0 = b[0];
+      if (b[1] < y0) y0 = b[1];
+      if (b[2] > x1) x1 = b[2];
+      if (b[3] > y1) y1 = b[3];
+    };
+    for (const i of this.sel.s) {
+      const s = this.doc.strokes[i];
+      if (s) eat(s.bb || bboxOf(s.pts, s.w));
+    }
+    for (const i of this.sel.i) {
+      const im = this.doc.images[i];
+      if (im) eat(imgBB(im));
+    }
+    return x0 === Infinity ? null : [x0, y0, x1, y1];
   }
 
   // 미니맵은 live 에 화면 좌표로 얹는다. 내용 사각형과 지금 보는 창을 같이 그려
@@ -671,11 +814,154 @@ class QuireView extends TextFileView {
     const ctx = this.lctx;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, this.live.width, this.live.height);
+    const v = this.doc.view;
+
     if (this.cur) {
       this.applyXform(ctx);
-      drawStroke(ctx, this.cur, this.doc.view.k);
+      drawStroke(ctx, this.cur, v.k);
     }
+
+    // 끄는 중인 선택 — base 에서 빠져 있으므로 여기서 옮겨 그린다
+    if (this.drag) {
+      ctx.save();
+      this.applyXform(ctx);
+      ctx.translate(this.drag.dx, this.drag.dy);
+      for (const i of this.sel.i) {
+        const im = this.doc.images[i];
+        if (im) drawImage(ctx, im, this.imgFor(im));
+      }
+      for (const i of this.sel.s) {
+        const s = this.doc.strokes[i];
+        if (s) drawStroke(ctx, s, v.k);
+      }
+      ctx.restore();
+    }
+
+    this.drawSel(ctx);
     this.drawMap(ctx);
+    this.drawRadial(ctx);
+  }
+
+  // 올가미 자취와 선택 사각형. 화면 좌표로 그린다 — 점선 간격이 줌에 안 휘게.
+  drawSel(ctx) {
+    const v = this.doc.view, d = this.dpr;
+    const S = (wx, wy) => [wx * v.k + v.x, wy * v.k + v.y];
+    ctx.save();
+    ctx.setTransform(d, 0, 0, d, 0, 0);
+    ctx.strokeStyle = cssVar(this.wrap, '--interactive-accent', '#4a8');
+    ctx.lineWidth = 1.5;
+
+    if (this.lasso && this.lasso.length >= 4) {
+      ctx.setLineDash([5, 4]);
+      ctx.beginPath();
+      for (let i = 0; i < this.lasso.length; i += 2) {
+        const [sx, sy] = S(this.lasso[i], this.lasso[i + 1]);
+        i ? ctx.lineTo(sx, sy) : ctx.moveTo(sx, sy);
+      }
+      ctx.closePath();
+      ctx.stroke();
+    }
+
+    const bb = this.selBB();
+    if (bb && !this.lasso) {
+      const dx = this.drag ? this.drag.dx : 0, dy = this.drag ? this.drag.dy : 0;
+      const [ax, ay] = S(bb[0] + dx, bb[1] + dy);
+      const [cx, cy] = S(bb[2] + dx, bb[3] + dy);
+      ctx.setLineDash([6, 4]);
+      ctx.strokeRect(ax - 3, ay - 3, cx - ax + 6, cy - ay + 6);
+      ctx.setLineDash([]);
+      // 몇 개를 골랐는지. 안 보이면 「골라졌나」를 모른다.
+      const n = this.sel.s.size + this.sel.i.size;
+      ctx.font = '11px var(--font-interface), sans-serif';
+      const label = `${n}`;
+      const w = ctx.measureText(label).width + 10;
+      ctx.fillStyle = cssVar(this.wrap, '--interactive-accent', '#4a8');
+      roundRect(ctx, ax - 3, ay - 20, w, 16, 4);
+      ctx.fill();
+      ctx.fillStyle = cssVar(this.wrap, '--text-on-accent', '#fff');
+      ctx.fillText(label, ax + 2, ay - 8);
+    }
+    ctx.restore();
+  }
+
+  // ── 입력 · 두 경로 공통 ──────────────────────────────────
+  // Pointer 경로와 Touch 경로가 같은 규칙을 쓰게 여기로 모은다.
+  // 전에는 지우개 처리가 양쪽에 따로 적혀 있어 한쪽만 고치면 갈렸다.
+  // 돌려주는 값이 true 면 「획이 아니다 — 여기서 끝」이다.
+
+  armLong(cx, cy) {
+    this.cancelLong();
+    this.longAt = [cx, cy];
+    this.longT = setTimeout(() => {
+      this.longT = 0;
+      this.openRadial(cx - this.live.getBoundingClientRect().left,
+                      cy - this.live.getBoundingClientRect().top);
+    }, LONG_MS);
+  }
+
+  cancelLong() {
+    if (this.longT) { clearTimeout(this.longT); this.longT = 0; }
+  }
+
+  beginPen(x, y, pr, cx, cy) {
+    if (this.radial) { this.radial.hit = null; return true; }   // 떠 있으면 다시 안 연다
+    this.armLong(cx, cy);
+
+    if (this.tool === 'er') { this.snapshot(); this.erasing = true; this.eraseAt(x, y); return true; }
+
+    if (this.tool === 'sel') {
+      if (this.hasSel && this.inSelBB(x, y)) {
+        this.drag = { dx: 0, dy: 0, ox: x, oy: y };
+        this.needBake = true;                 // 고른 것을 base 에서 뺀다
+      } else {
+        this.sel.s.clear(); this.sel.i.clear();
+        this.lasso = [x, y];
+      }
+      this.schedule();
+      return true;
+    }
+
+    this.cur = this.newStroke(x, y, pr);
+    this.schedule();
+    return true;
+  }
+
+  movePen(x, y, cx, cy) {
+    if (this.radial) {
+      const r = this.live.getBoundingClientRect();
+      this.radial.hit = this.radialHit(cx - r.left, cy - r.top);
+      this.schedule();
+      return true;
+    }
+    if (this.longT && this.longAt) {
+      const dx = cx - this.longAt[0], dy = cy - this.longAt[1];
+      if (dx * dx + dy * dy > LONG_SLOP * LONG_SLOP) this.cancelLong();
+    }
+    if (this.erasing) { this.eraseAt(x, y); return true; }
+    if (this.drag) {
+      this.drag.dx = x - this.drag.ox;
+      this.drag.dy = y - this.drag.oy;
+      this.schedule();
+      return true;
+    }
+    if (this.lasso) {
+      const n = this.lasso.length;
+      const dx = x - this.lasso[n - 2], dy = y - this.lasso[n - 1];
+      const k = this.doc.view.k;
+      if ((dx * dx + dy * dy) * k * k >= 4) this.lasso.push(x, y);
+      this.schedule();
+      return true;
+    }
+    return false;
+  }
+
+  endPen() {
+    this.cancelLong();
+    if (this.radial) { this.closeRadial(true); return true; }
+    if (this.erasing) { this.erasing = false; this.commitDoc(); return true; }
+    if (this.drag) { this.dropDrag(); return true; }
+    if (this.lasso) { this.selectByLasso(); return true; }
+    return false;
   }
 
   // ── 입력 ────────────────────────────────────────────────
@@ -729,11 +1015,7 @@ class QuireView extends TextFileView {
 
     this.penId = e.pointerId;
     const [x, y] = this.toWorld(e.clientX, e.clientY);
-
-    if (this.tool === 'er') { this.snapshot(); this.erasing = true; this.eraseAt(x, y); return; }
-
-    this.cur = this.newStroke(x, y, this.prOf(e.pressure));
-    this.schedule();
+    this.beginPen(x, y, this.prOf(e.pressure), e.clientX, e.clientY);
   };
 
   onMove = (e) => {
@@ -748,15 +1030,15 @@ class QuireView extends TextFileView {
       return;
     }
 
-    if (this.erasing) {
+    {
       const [x, y] = this.toWorld(e.clientX, e.clientY);
-      this.eraseAt(x, y);
-      return;
+      if (this.movePen(x, y, e.clientX, e.clientY)) { e.preventDefault(); return; }
     }
 
     // **자가 복구.** 취소가 끼어들어 획이 끊겨도, 펜이 아직 닿아 있으면(buttons≠0)
     // 여기서 다시 시작한다. 「둘째 획부터 안 그려짐」이 이 자리였다.
-    if (!this.cur && e.buttons !== 0 && this.tool !== 'er' && this.inCanvas(e)) {
+    if (!this.cur && e.buttons !== 0 && this.tool !== 'er' && this.tool !== 'sel' &&
+        !this.radial && this.inCanvas(e)) {
       const [sx, sy] = this.toWorld(e.clientX, e.clientY);
       this.cur = this.newStroke(sx, sy, this.prOf(e.pressure));
       this.recovered = (this.recovered || 0) + 1;
@@ -801,7 +1083,7 @@ class QuireView extends TextFileView {
       if (this.touches.size < 2) this.pinch = null;
       return;
     }
-    if (this.erasing) { this.erasing = false; this.commitDoc(); return; }
+    if (this.endPen()) return;
     if (!this.cur) return;
 
     this.commitStroke();
@@ -865,16 +1147,16 @@ class QuireView extends TextFileView {
       if (kind === 'start') {
         this.touches.clear();
         this.pinch = null;
-        if (this.tool === 'er') { this.snapshot(); this.erasing = true; this.eraseAt(x, y); return; }
-        this.cur = this.newStroke(x, y, pr);
-        this.schedule();
+        this.beginPen(x, y, pr, t0.clientX, t0.clientY);
         return;
       }
 
       if (kind === 'move') {
-        if (this.erasing) { this.eraseAt(x, y); return; }
-        // 펜을 뗐다 대는 사이에 start 를 놓쳤어도 여기서 다시 시작한다
+        if (this.movePen(x, y, t0.clientX, t0.clientY)) return;
+        // 펜을 뗐다 대는 사이에 start 를 놓쳤어도 여기서 다시 시작한다.
+        // 다만 올가미·지우개·메뉴 중에는 안 만든다 — 그 도구에서 획이 생기면 안 된다.
         if (!this.cur) {
+          if (this.tool === 'er' || this.tool === 'sel' || this.radial) return;
           this.cur = this.newStroke(x, y, pr);
           this.recovered = (this.recovered || 0) + 1;
           this.schedule();
@@ -889,7 +1171,7 @@ class QuireView extends TextFileView {
       }
 
       // end / cancel
-      if (this.erasing) { this.erasing = false; this.commitDoc(); return; }
+      if (this.endPen()) { this.drawLive(); return; }
       this.commitStroke();
       this.cur = null;
       this.drawLive();
@@ -923,6 +1205,10 @@ class QuireView extends TextFileView {
       return;
     }
     // 그린 만큼은 살려서 굽고, 상태만 깨끗이 비운다
+    this.cancelLong();
+    if (this.radial) this.closeRadial(false);
+    if (this.drag) this.dropDrag();
+    if (this.lasso) { this.lasso = null; this.needBake = true; }
     this.commitStroke();
     this.cur = null;
     this.pred = null;
@@ -1006,15 +1292,11 @@ class QuireView extends TextFileView {
   }
 
   fit() {
-    const ss = this.doc.strokes;
     const v = this.doc.view;
-    if (!ss.length) { v.x = 0; v.y = 0; v.k = 1; this.needBake = true; return this.schedule(); }
-    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-    for (const s of ss) {
-      const b = s.bb || bboxOf(s.pts, s.w);
-      x0 = Math.min(x0, b[0]); y0 = Math.min(y0, b[1]);
-      x1 = Math.max(x1, b[2]); y1 = Math.max(y1, b[3]);
-    }
+    this._bb = null;
+    const bb = this.contentBB();
+    if (!bb) { v.x = 0; v.y = 0; v.k = 1; this.needBake = true; return this.schedule(); }
+    const [x0, y0, x1, y1] = bb;
     const r = this.wrap.getBoundingClientRect();
     const k = Math.min(r.width / (x1 - x0 || 1), r.height / (y1 - y0 || 1)) * 0.9;
     v.k = Math.min(8, Math.max(0.1, k));
@@ -1024,10 +1306,360 @@ class QuireView extends TextFileView {
     this.schedule();
   }
 
+  // ── 방사형 메뉴 ──────────────────────────────────────────
+  // 애플펜슬의 더블탭·스퀴즈는 WebKit 이 웹에 안 넘긴다. 그래서 「꾹 누름」으로 받는다.
+  // 툴바까지 손이 올라가지 않게 하는 것이 목적이라, 메뉴는 누른 자리에 뜬다.
+  radialItems() {
+    const tools = [
+      { k: 'tool', v: 'pen', t: '✏️' }, { k: 'tool', v: 'hl', t: '🖍' },
+      { k: 'tool', v: 'er', t: '🩹' }, { k: 'tool', v: 'sel', t: '⬚' },
+    ];
+    const outer = [];
+    for (const c of PALETTE) outer.push({ k: 'color', v: c });
+    for (const w of WIDTHS) outer.push({ k: 'width', v: w });
+    return { inner: tools, outer };
+  }
+
+  openRadial(cx, cy) {
+    // 메뉴가 뜨면 그리던 획은 획이 아니다. 버린다.
+    this.cur = null;
+    this.pred = null;
+    // 누르고 있던 동작도 같이 끝낸다. 안 끝내면 메뉴를 닫은 뒤에도
+    // erasing 이 켜진 채로 남아 펜을 움직일 때마다 획이 지워진다.
+    if (this.erasing) this.erasing = false;
+    if (this.drag) this.dropDrag();
+    if (this.lasso) { this.lasso = null; this.needBake = true; }
+    this.radial = { cx, cy, hit: null };
+    this.schedule();
+  }
+
+  // 화면 좌표 → 어느 칸인가. 반지름으로 안·바깥 고리를 가른다.
+  radialHit(cx, cy) {
+    const R = this.radial;
+    if (!R) return null;
+    const dx = cx - R.cx, dy = cy - R.cy;
+    const r = Math.hypot(dx, dy);
+    if (r < 26) return null;                       // 가운데는 취소
+    const { inner, outer } = this.radialItems();
+    let a = Math.atan2(dy, dx) + Math.PI / 2;      // 12시를 0 으로
+    a = ((a % 6.283185) + 6.283185) % 6.283185;
+    if (r < 74) {
+      const i = Math.floor((a / 6.283185) * inner.length) % inner.length;
+      return inner[i];
+    }
+    if (r < 116) {
+      const i = Math.floor((a / 6.283185) * outer.length) % outer.length;
+      return outer[i];
+    }
+    return null;                                    // 바깥으로 끌면 취소
+  }
+
+  applyRadial(it) {
+    if (!it) return;
+    if (it.k === 'tool') this.setTool(it.v);
+    else if (it.k === 'color') this.setColor(it.v);
+    else if (it.k === 'width') this.setWidth(it.v);
+  }
+
+  closeRadial(apply) {
+    if (!this.radial) return;
+    const hit = this.radial.hit;
+    this.radial = null;
+    if (apply) this.applyRadial(hit);
+    this.schedule();
+  }
+
+  drawRadial(ctx) {
+    const R = this.radial;
+    if (!R) return;
+    const d = this.dpr;
+    const { inner, outer } = this.radialItems();
+    ctx.save();
+    ctx.setTransform(d, 0, 0, d, 0, 0);
+
+    const bg = cssVar(this.wrap, '--background-secondary', '#222');
+    const bd = cssVar(this.wrap, '--background-modifier-border', '#888');
+    const acc = cssVar(this.wrap, '--interactive-accent', '#4a8');
+
+    const ring = (r0, r1, items, i, on) => {
+      const a0 = (i / items.length) * 6.283185 - Math.PI / 2;
+      const a1 = ((i + 1) / items.length) * 6.283185 - Math.PI / 2;
+      ctx.beginPath();
+      ctx.arc(R.cx, R.cy, r1, a0, a1);
+      ctx.arc(R.cx, R.cy, r0, a1, a0, true);
+      ctx.closePath();
+      ctx.fillStyle = on ? acc : bg;
+      ctx.globalAlpha = on ? 0.95 : 0.88;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = bd;
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      return [(a0 + a1) / 2, (r0 + r1) / 2];
+    };
+    const same = (a, b) => a && b && a.k === b.k && a.v === b.v;
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    for (let i = 0; i < inner.length; i++) {
+      const it = inner[i];
+      const [am, rm] = ring(28, 72, inner, i, same(R.hit, it) || it.v === this.tool);
+      ctx.font = '19px sans-serif';
+      ctx.fillStyle = cssVar(this.wrap, '--text-normal', '#eee');
+      ctx.fillText(it.t, R.cx + Math.cos(am) * rm, R.cy + Math.sin(am) * rm);
+    }
+    for (let i = 0; i < outer.length; i++) {
+      const it = outer[i];
+      const [am, rm] = ring(76, 114, outer, i,
+        same(R.hit, it) || (it.k === 'color' ? it.v === this.color : it.v === this.width));
+      const px = R.cx + Math.cos(am) * rm, py = R.cy + Math.sin(am) * rm;
+      if (it.k === 'color') {
+        ctx.beginPath();
+        ctx.arc(px, py, 9, 0, 6.284);
+        ctx.fillStyle = it.v;
+        ctx.fill();
+        ctx.strokeStyle = bd;
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      } else {
+        ctx.beginPath();
+        ctx.arc(px, py, Math.min(9, 2 + it.v * 1.0), 0, 6.284);
+        ctx.fillStyle = cssVar(this.wrap, '--text-normal', '#eee');
+        ctx.fill();
+      }
+    }
+    ctx.restore();
+  }
+
+  // ── 올가미 · 이동 ────────────────────────────────────────
+  // 완전히 안에 든 것만 고른다. 걸친 것까지 고르면 무엇이 잡혔는지 예측이 안 된다.
+  selectByLasso() {
+    const poly = this.lasso;
+    this.sel.s.clear(); this.sel.i.clear();
+    if (poly && poly.length >= 6) {
+      for (let i = 0; i < this.doc.strokes.length; i++) {
+        const p = this.doc.strokes[i].pts;
+        let all = true;
+        for (let j = 0; j < p.length; j += 3) {
+          if (!pointInPoly(p[j], p[j + 1], poly)) { all = false; break; }
+        }
+        if (all && p.length) this.sel.s.add(i);
+      }
+      for (let i = 0; i < this.doc.images.length; i++) {
+        const m = this.doc.images[i];
+        const c = [[m.x, m.y], [m.x + m.w, m.y], [m.x, m.y + m.h], [m.x + m.w, m.y + m.h]];
+        if (c.every(([x, y]) => pointInPoly(x, y, poly))) this.sel.i.add(i);
+      }
+    }
+    this.lasso = null;
+    this.needBake = true;
+    this.schedule();
+  }
+
+  inSelBB(x, y) {
+    const bb = this.selBB();
+    if (!bb) return false;
+    const pad = 8 / this.doc.view.k;
+    return x >= bb[0] - pad && x <= bb[2] + pad && y >= bb[1] - pad && y <= bb[3] + pad;
+  }
+
+  dropDrag() {
+    const d = this.drag;
+    this.drag = null;
+    if (!d || (d.dx === 0 && d.dy === 0)) { this.needBake = true; return this.schedule(); }
+    this.snapshot();
+    // pts 를 고치므로 얕은 복사로는 이력이 같이 움직인다. 고칠 것만 새로 만든다.
+    for (const i of this.sel.s) {
+      const s = this.doc.strokes[i];
+      if (!s) continue;
+      const p = s.pts.slice();
+      for (let j = 0; j < p.length; j += 3) { p[j] += d.dx; p[j + 1] += d.dy; }
+      const n = Object.assign({}, s, { pts: p });
+      n.bb = bboxOf(p, n.w);
+      this.doc.strokes[i] = n;
+    }
+    for (const i of this.sel.i) {
+      const m = this.doc.images[i];
+      if (!m) continue;
+      this.doc.images[i] = Object.assign({}, m, { x: m.x + d.dx, y: m.y + d.dy });
+    }
+    this._bb = null;
+    this.needBake = true;
+    this.schedule();
+    this.commitDoc();
+  }
+
+  deleteSel() {
+    if (!this.hasSel) return;
+    this.snapshot();
+    this.doc.strokes = this.doc.strokes.filter((_, i) => !this.sel.s.has(i));
+    this.doc.images = this.doc.images.filter((_, i) => !this.sel.i.has(i));
+    this.sel.s.clear(); this.sel.i.clear();
+    this._bb = null;
+    this.needBake = true;
+    this.schedule();
+    this.commitDoc();
+  }
+
+  // ── 이미지 ──────────────────────────────────────────────
+  // 볼트 첨부로 두고 경로만 문서에 적는다. 데이터 URI 로 박으면 파일이
+  // 수십 MB 가 되고 이력 한 칸마다 그만큼이 복사된다.
+  imgFor(im) {
+    let el = this._img.get(im.src);
+    if (el) return el;
+    el = new Image();
+    el.onload = () => { this.needBake = true; this.schedule(); };
+    el.onerror = () => { /* 자리 표시로 남는다 */ };
+    let url = im.src;
+    if (!/^(data:|https?:|app:|blob:)/.test(url)) {
+      const f = this.app.vault.getAbstractFileByPath(url);
+      url = f ? this.app.vault.getResourcePath(f) : url;
+    }
+    el.src = url;
+    this._img.set(im.src, el);
+    return el;
+  }
+
+  // 화면 가운데에 놓는다. 긴 변이 화면의 절반을 안 넘게 줄인다.
+  placeImage(src, natW, natH, attr) {
+    const r = this.wrap.getBoundingClientRect();
+    const v = this.doc.view;
+    const maxW = (r.width * 0.5) / v.k, maxH = (r.height * 0.5) / v.k;
+    let w = natW || 320, h = natH || 240;
+    const s = Math.min(1, maxW / w, maxH / h);
+    w *= s; h *= s;
+    const [cx, cy] = this.toWorld(r.left + r.width / 2, r.top + r.height / 2);
+    this.snapshot();
+    this.doc.images.push({ id: String(Date.now()) + Math.random().toString(36).slice(2, 6),
+                           src, x: cx - w / 2, y: cy - h / 2, w, h, attr: attr || undefined });
+    this._bb = null;
+    this.needBake = true;
+    this.schedule();
+    this.commitDoc();
+  }
+
+  // 볼트에 바이트를 넣고 그 경로를 돌려준다. 첨부 위치는 볼트 설정을 그대로 탄다.
+  async saveAttachment(name, buf) {
+    const fm = this.app.fileManager;
+    const base = this.file ? this.file.path : '';
+    let path = fm && fm.getAvailablePathForAttachment
+      ? await fm.getAvailablePathForAttachment(name, base)
+      : name;
+    const f = await this.app.vault.createBinary(path, buf);
+    return f.path;
+  }
+
+  async addFromBlob(name, buf, attr) {
+    try {
+      const path = await this.saveAttachment(name, buf);
+      const el = new Image();
+      const done = () => this.placeImage(path, el.naturalWidth, el.naturalHeight, attr);
+      el.onload = done;
+      el.onerror = () => this.placeImage(path, 320, 240, attr);
+      const f = this.app.vault.getAbstractFileByPath(path);
+      el.src = f ? this.app.vault.getResourcePath(f) : path;
+    } catch (e) {
+      new Notice('Quire — could not save the image: ' + (e && e.message ? e.message : e));
+    }
+  }
+
+  pickImage() {
+    const inp = document.createElement('input');
+    inp.type = 'file';
+    inp.accept = 'image/*';
+    inp.onchange = async () => {
+      const f = inp.files && inp.files[0];
+      if (!f) return;
+      this.addFromBlob(f.name, await f.arrayBuffer());
+    };
+    inp.click();
+  }
+
   commitDoc() {
     if (this.readonly) return;
     this.requestSave();   // TextFileView 가 더티 표시·저장을 맡는다
   }
+}
+
+// ── 이미지 검색 ────────────────────────────────────────────
+// Openverse — 키가 필요 없고 결과가 전부 CC·퍼블릭 도메인이다.
+// 구글·빙은 유료 키가 필요하고 저작권 확인이 안 된다. 그래서 여기로 왔다.
+// 가져온 그림에는 출처를 같이 박는다 — CC 는 표시가 조건이다.
+const OV = 'https://api.openverse.org/v1/images/';
+
+class ImageSearch extends Modal {
+  constructor(app, view) {
+    super(app);
+    this.view = view;
+    this.busy = false;
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.addClass('quire-search');
+    contentEl.createEl('h3', { text: 'Insert an image' });
+    contentEl.createEl('p', { cls: 'quire-hint',
+      text: 'Openverse — Creative Commons and public domain. The credit line is stored with the image.' });
+
+    const row = contentEl.createDiv({ cls: 'quire-srow' });
+    this.input = row.createEl('input', { type: 'text', attr: { placeholder: 'nurse, hospital ward, anatomy…' } });
+    const go = row.createEl('button', { text: 'Search' });
+    go.onclick = () => this.run();
+    this.input.onkeydown = (e) => { if (e.key === 'Enter') this.run(); };
+
+    this.status = contentEl.createDiv({ cls: 'quire-hint' });
+    this.grid = contentEl.createDiv({ cls: 'quire-grid' });
+    setTimeout(() => this.input.focus(), 20);
+  }
+
+  async run() {
+    const q = (this.input.value || '').trim();
+    if (!q || this.busy) return;
+    this.busy = true;
+    this.grid.empty();
+    this.status.setText('Searching…');
+    try {
+      const url = `${OV}?q=${encodeURIComponent(q)}&page_size=24&mature=false`;
+      const r = await requestUrl({ url, throw: false });
+      if (r.status !== 200) throw new Error(`Openverse returned ${r.status}`);
+      const res = (r.json && r.json.results) || [];
+      this.status.setText(res.length ? `${res.length} results` : 'Nothing found.');
+      for (const it of res) this.card(it);
+    } catch (e) {
+      // 왜 안 됐는지 그대로 보여 준다. 「검색 실패」만 뜨면 망인지 질의인지 모른다.
+      this.status.setText('Could not search — ' + (e && e.message ? e.message : String(e)));
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  card(it) {
+    const c = this.grid.createDiv({ cls: 'quire-card' });
+    const img = c.createEl('img');
+    img.src = it.thumbnail || it.url;
+    img.loading = 'lazy';
+    const who = it.creator ? `${it.creator}` : 'Unknown';
+    const lic = (it.license || '').toUpperCase() + (it.license_version ? ' ' + it.license_version : '');
+    c.createDiv({ cls: 'quire-cap', text: `${who} · ${lic}` });
+    c.setAttr('title', `${it.title || ''}\n${who} · ${lic}`);
+    c.onclick = () => this.take(it, who, lic);
+  }
+
+  async take(it, who, lic) {
+    this.status.setText('Downloading…');
+    try {
+      const r = await requestUrl({ url: it.url, throw: false });
+      if (r.status !== 200) throw new Error(`Download returned ${r.status}`);
+      const ext = (it.url.split('?')[0].match(/\.(jpe?g|png|gif|webp|svg)$/i) || [, 'jpg'])[1];
+      const safe = (it.title || 'image').replace(/[\\/:*?"<>|]/g, '').slice(0, 48).trim() || 'image';
+      await this.view.addFromBlob(`${safe}.${ext}`, r.arrayBuffer, `${who} · ${lic} · Openverse`);
+      this.close();
+    } catch (e) {
+      this.status.setText('Could not download — ' + (e && e.message ? e.message : String(e)));
+    }
+  }
+
+  onClose() { this.contentEl.empty(); }
 }
 
 const DEFAULT_SETTINGS = { tool: 'pen', color: PALETTE[0], width: WIDTHS[1], pressure: true,
