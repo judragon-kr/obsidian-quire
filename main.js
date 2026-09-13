@@ -196,6 +196,7 @@ class QuireView extends TextFileView {
     this.pressure = st.pressure;
     this.grid = st.grid;
     this.map = st.map;
+    this.palOn = st.palOn;
     this._bb = null;        // 내용 사각형 캐시. 획이 바뀌면 버린다
     this._pats = new Map();  // 격자 타일. 모드×간격×색×dpr 로 키를 잡는다
     this.undoStack = [];
@@ -280,6 +281,7 @@ class QuireView extends TextFileView {
     this.lctx = this.live.getContext('2d', { desynchronized: true, alpha: true });
 
     this.buildToolbar(root);
+    this.buildPalette();
 
     // touch-action: none 이 없으면 그리는 중에 화면이 스크롤된다.
     this.live.style.touchAction = 'none';
@@ -426,6 +428,8 @@ class QuireView extends TextFileView {
     this.gridBtn = btn('▦', 'Grid: off / dots / lines', () =>
       this.setGrid(GRIDS[(GRIDS.indexOf(this.grid) + 1) % GRIDS.length]));
     this.mapBtn = btn('🗺', 'Minimap', () => this.setMap(!this.map));
+    this.palBtn = btn('🎛', 'Floating palette — drag it where your hand rests',
+                      () => this.setPalette(!this.palOn));
     btn('⊙', 'Fit to content', () => this.fit());
     btn('🐞', 'Toggle input diagnostics', () => {
       this.dbg = !this.dbg;
@@ -563,6 +567,12 @@ class QuireView extends TextFileView {
     for (const d of this.wEls) {
       d.toggleClass('is-on', Number(d.dataset.w) === this.width);
     }
+    if (this.palBtn) this.palBtn.toggleClass('is-on', this.palOn);
+    if (this.pal) {
+      for (const k in this.palTool) this.palTool[k].toggleClass('is-on', k === this.tool);
+      for (const d of this.palW) d.toggleClass('is-on', Number(d.dataset.w) === this.width);
+      for (const d of this.palC) d.toggleClass('is-on', d.dataset.color === this.color && this.tool !== 'er');
+    }
     this.prBtn.toggleClass('is-on', this.pressure);
     this.gridBtn.toggleClass('is-on', this.grid !== 'off');
     this.gridBtn.setText(this.grid === 'line' ? '▤' : '▦');
@@ -584,6 +594,7 @@ class QuireView extends TextFileView {
       c.style.height = r.height + 'px';
     }
     this.dpr = dpr;
+    if (this.pal) this.movePalette(parseFloat(this.pal.style.left) || 16, parseFloat(this.pal.style.top) || 96);
     this.needBake = true;
     this.schedule();
   }
@@ -1329,6 +1340,103 @@ class QuireView extends TextFileView {
     this.schedule();
   }
 
+  // ── 떠 있는 팔레트 ────────────────────────────────────────
+  // 제스처를 셋 시도해 셋 다 실패했다 — 그리는 것도 펜을 유리에 대는 것이라
+  // 「메뉴를 열려는 접촉」과 「긋는 접촉」을 가를 근거가 없다.
+  // 그래서 판정을 없앤다. 손 닿는 자리에 두고 누르면 된다.
+  buildPalette() {
+    const pal = this.pal = this.wrap.createDiv({ cls: 'quire-pal' });
+    const grip = pal.createDiv({ cls: 'quire-grip', attr: { 'aria-label': 'Drag to move' } });
+    grip.setText('⠿');
+
+    const tools = pal.createDiv({ cls: 'quire-prow' });
+    this.palTool = {};
+    for (const [k, s, title] of [['pen','✏️','Pen'], ['hl','🖍','Highlighter'],
+                                 ['er','🩹','Eraser'], ['sel','⬚','Select']]) {
+      const b = tools.createEl('button', { text: s, attr: { 'aria-label': title, title } });
+      b.onclick = () => this.setTool(k);
+      this.palTool[k] = b;
+    }
+
+    const ws = pal.createDiv({ cls: 'quire-prow' });
+    this.palW = [];
+    for (const w of WIDTHS) {
+      const d = ws.createDiv({ cls: 'quire-w', attr: { 'aria-label': `Width ${w}`, title: `Width ${w}` } });
+      d.dataset.w = String(w);
+      const dot = d.createDiv({ cls: 'quire-wdot' });
+      const px = Math.min(16, 3 + w * 1.7);
+      dot.style.width = dot.style.height = `${px}px`;
+      d.onclick = () => this.setWidth(w);
+      this.palW.push(d);
+    }
+
+    const cs = pal.createDiv({ cls: 'quire-prow quire-prow-c' });
+    this.palC = [];
+    for (const c of PALETTE) {
+      const d = cs.createDiv({ cls: 'quire-sw', attr: { 'aria-label': c, title: c } });
+      d.dataset.color = c;
+      d.style.background = c;
+      d.onclick = () => this.setColor(c);
+      this.palC.push(d);
+    }
+
+    // 끌어 옮기기. grip 에서만 잡는다 — 버튼을 끌면 캔버스가 아니라 팔레트가 움직여 헷갈린다.
+    let drag = null;
+    grip.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const r = pal.getBoundingClientRect(), w = this.wrap.getBoundingClientRect();
+      drag = { dx: e.clientX - r.left, dy: e.clientY - r.top, w };
+      grip.setPointerCapture(e.pointerId);
+    });
+    grip.addEventListener('pointermove', (e) => {
+      if (!drag) return;
+      e.preventDefault();
+      e.stopPropagation();
+      this.movePalette(e.clientX - drag.dx - drag.w.left, e.clientY - drag.dy - drag.w.top);
+    });
+    const up = (e) => {
+      if (!drag) return;
+      drag = null;
+      const s = this.plugin.settings;
+      s.palX = parseFloat(pal.style.left) || 0;
+      s.palY = parseFloat(pal.style.top) || 0;
+      this.plugin.queueSave();
+      e.stopPropagation();
+    };
+    grip.addEventListener('pointerup', up);
+    grip.addEventListener('pointercancel', up);
+
+    // 팔레트 위에서는 캔버스가 그리지 않게 막는다
+    for (const ev of ['pointerdown', 'touchstart']) {
+      pal.addEventListener(ev, (e) => e.stopPropagation(), { passive: false });
+    }
+
+    const s = this.plugin.settings;
+    this.movePalette(s.palX != null ? s.palX : 16, s.palY != null ? s.palY : 96);
+    this.setPalette(this.palOn);
+  }
+
+  // 화면 밖으로 나가면 못 되찾는다. 항상 안쪽으로 물린다.
+  movePalette(x, y) {
+    if (!this.pal) return;
+    const w = this.wrap.getBoundingClientRect();
+    const r = this.pal.getBoundingClientRect();
+    const pw = r.width || 148, ph = r.height || 132;
+    const nx = Math.max(4, Math.min(x, Math.max(4, w.width - pw - 4)));
+    const ny = Math.max(4, Math.min(y, Math.max(4, w.height - ph - 4)));
+    this.pal.style.left = nx + 'px';
+    this.pal.style.top = ny + 'px';
+  }
+
+  setPalette(on) {
+    this.palOn = on;
+    this.plugin.settings.palOn = on;
+    this.plugin.queueSave();
+    if (this.pal) this.pal.style.display = on ? 'flex' : 'none';
+    this.refreshBar();
+  }
+
   // ── 방사형 메뉴 ──────────────────────────────────────────
   // 애플펜슬의 더블탭·스퀴즈는 WebKit 이 웹에 안 넘긴다. 그래서 「꾹 누름」으로 받는다.
   // 툴바까지 손이 올라가지 않게 하는 것이 목적이라, 메뉴는 누른 자리에 뜬다.
@@ -1686,7 +1794,7 @@ class ImageSearch extends Modal {
 }
 
 const DEFAULT_SETTINGS = { tool: 'pen', color: PALETTE[0], width: WIDTHS[1], pressure: true,
-                           grid: 'dot', map: true };
+                           grid: 'dot', map: true, palOn: true, palX: null, palY: null };
 
 module.exports = class Quire extends Plugin {
   async onload() {

@@ -17,6 +17,7 @@ global.requestAnimationFrame = (f)=>1; global.cancelAnimationFrame = ()=>{};
 global.ResizeObserver = class { observe(){} disconnect(){} };
 global.performance = { now: () => 0 };
 
+const WIDTHS_N = 4, PALETTE_N = 6;
 const TAP_MS_TEST = 320;   // main.js 의 TAP_MS 와 같아야 한다
 const Quire = require(path.join(__dirname, '..', 'main.js'));
 const p = new Quire();
@@ -305,6 +306,37 @@ const p = new Quire();
   v.fingerTapDown({ identifier: 10, clientX: 50, clientY: 50 });
   ok(v.fingerTapUp({ identifier: 10, clientX: 50, clientY: 50 }) === false, '펜이 없으면 안 연다');
   v.radial=null; v.tap=null; v.cur=null;
+
+  // ── J. 떠 있는 팔레트 ──────────────────────────────────
+  ok(v.pal != null, '팔레트가 만들어진다');
+  const prows = v.pal.children.filter(c => c.classes.has('quire-prow'));
+  ok(prows.length === 3, '줄이 셋이다 — 도구·굵기·색');
+  ok(Object.keys(v.palTool).length === 4, '도구 4개');
+  ok(v.palW.length === WIDTHS_N, '굵기 4개');
+  ok(v.palC.length === PALETTE_N, '색 6개');
+
+  // 팔레트에서 고른 것이 툴바와 같이 칠해져야 한다
+  v.setTool('hl');
+  ok(v.palTool.hl.classes.has('is-on') && !v.palTool.pen.classes.has('is-on'),
+     '팔레트가 지금 도구를 표시한다');
+  ok(v.hlBtn.classes.has('is-on'), '툴바도 같이 바뀐다');
+  v.setTool('pen');
+
+  // 화면 밖으로 나가면 못 되찾는다 — 항상 안쪽으로 물려야 한다
+  v.movePalette(99999, 99999);
+  ok(parseFloat(v.pal.style.left) < 800 && parseFloat(v.pal.style.top) < 600,
+     '팔레트가 화면 밖으로 안 나간다');
+  v.movePalette(-500, -500);
+  ok(parseFloat(v.pal.style.left) >= 4 && parseFloat(v.pal.style.top) >= 4,
+     '왼쪽·위로도 안 나간다');
+
+  // 자리와 켜짐이 저장돼야 다음에 그 자리에 있다
+  v.movePalette(120, 200);
+  v.setPalette(false);
+  ok(p.settings.palOn === false, '끄면 설정에 남는다');
+  ok(v.pal.style.display === 'none', '실제로 숨는다');
+  v.setPalette(true);
+  ok(v.pal.style.display === 'flex', '다시 켜진다');
 
   console.log(fail.length ? `\n✗ 실패 ${fail.length}건` : '\n○ 전부 통과');
   process.exit(fail.length ? 1 : 0);

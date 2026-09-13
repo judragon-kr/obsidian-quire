@@ -34,22 +34,27 @@ Pick the **⬚** tool, draw a lasso around what you want, then drag it. Only thi
 **entirely inside** the lasso are picked up — partly-crossed strokes are left alone, so
 what you get is predictable. `Delete` removes the selection, `Escape` drops it.
 
-## Radial menu — rest a finger and tap
+## Floating palette
 
-With the pen on the glass, tap once with a finger. The wheel opens at the pen. Inner ring
-picks the tool, outer ring picks colour and width. Slide onto one and lift; lift in the
-middle, or well outside, to cancel.
+Toolbar **🎛** shows a small palette on the canvas. Drag it by the grip to wherever your
+hand rests; it stays there and the position is remembered. Tools, four widths, six
+colours — one tap each. No timing, no gesture, nothing to trigger by accident.
 
-It fires when the finger *lifts*, so a palm parked on the screen never triggers it — a
-palm stays down.
+**Three pen gestures were tried and all three failed**, and the reason is structural:
+drawing is also pen-on-glass, so a contact meant to open a menu cannot be told apart from
+a contact meant to draw.
 
-Apple Pencil's double-tap and squeeze are not handed to web views by WebKit, so a plugin
-cannot read them.
+| | why it failed |
+| --- | --- |
+| hold 420 ms / 9 px | hand tremor cancelled it; it almost never fired |
+| hold 280 ms / 22 px | fired while rolling the pen to place a dot |
+| rest a finger and tap | needs the second hand mid-stroke |
 
-**A pen-only gesture was tried and removed.** Drawing is also pen-on-glass, so holding
-still cannot be told apart from placing a dot or pausing to think. At 420 ms / 9 px hand
-tremor cancelled it and it almost never fired; at 280 ms / 22 px it fired while rolling
-the pen to make a dot. There is no useful value between the two.
+Apple Pencil's double-tap and squeeze would solve this, but WebKit does not hand them to
+web views — they are native-only. So the palette carries no detection at all: it is
+simply within reach.
+
+The radial wheel is still there for the finger tap, if you want it.
 
 ## Images
 

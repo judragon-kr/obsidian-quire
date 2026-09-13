@@ -65,3 +65,21 @@
 .quire-card img { width: 100%; height: 92px; object-fit: cover; display: block; }
 .quire-cap { font-size: 10px; color: var(--text-muted); padding: 3px 5px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ── 떠 있는 팔레트 ──
+   제스처로 여는 것을 셋 시도해 셋 다 실패했다(그리기와 구분 불가).
+   판정을 없애고 손 닿는 자리에 두는 쪽으로 갔다. grip 으로 끌어 옮긴다. */
+.quire-pal { position: absolute; z-index: 6; display: flex; flex-direction: column; gap: 5px;
+  padding: 6px; border-radius: 10px; width: max-content;
+  background: var(--background-secondary); border: 1px solid var(--background-modifier-border);
+  box-shadow: 0 4px 14px rgba(0,0,0,.22); touch-action: none; }
+.quire-grip { cursor: grab; text-align: center; line-height: 1; font-size: 13px;
+  color: var(--text-faint); padding: 1px 0 3px; letter-spacing: 2px; touch-action: none; }
+.quire-grip:active { cursor: grabbing; }
+.quire-prow { display: flex; gap: 4px; }
+.quire-prow-c { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+.quire-pal button { width: 32px; height: 32px; padding: 0; font-size: 15px; }
+.quire-pal button.is-on { background: var(--interactive-accent); color: var(--text-on-accent); }
+.quire-pal .quire-w { width: 32px; height: 26px; }
+.quire-pal .quire-sw { width: 26px; height: 26px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--background-modifier-border); }
