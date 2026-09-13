@@ -65,7 +65,10 @@ const RING_FROM = 0.5;
 // 「멈추면 메뉴」와 안 부딪힌다: 그은 것이 있으면 도형, 없으면 메뉴다.
 const SHAPE_MS = 600;    // 이만큼 멈춰 있으면 보정
 const SHAPE_MIN = 26;    // 화면 px. 이보다 짧은 획은 글씨로 본다
-const SNAP_DEG = 7;      // 0·45·90도에 이만큼 가까우면 붙인다
+// 각도 붙이기는 **수평·수직만** 한다. 45도에 붙이면 수학에서 틀린 그림이 된다 —
+// 기울기가 뜻을 가지는데 43도를 45도로 돌려 버린다.
+// 붙일 때도 돌리지 않고 **눌러서** 맞춘다. 시작점을 축으로 돌리면 끝점이 눈에 띄게 튄다.
+const SNAP_DEG = 4;
 
 // Douglas–Peucker. 꺾인 자리를 남기고 나머지를 버린다.
 function simplify(pts, tol) {
@@ -151,15 +154,15 @@ function shapePts(sh, k) {
   const push = (x, y) => out.push(x, y, 1);
   if (sh.kind === 'line') {
     let [ax, ay] = sh.a, [bx, by] = sh.b;
-    // 0·45·90도에 가까우면 붙인다
-    const ang = Math.atan2(by - ay, bx - ax);
-    const L = Math.hypot(bx - ax, by - ay);
-    const step = Math.PI / 4;
-    const snapped = Math.round(ang / step) * step;
-    if (Math.abs(ang - snapped) < SNAP_DEG * Math.PI / 180) {
-      bx = ax + Math.cos(snapped) * L;
-      by = ay + Math.sin(snapped) * L;
+    // 수평·수직만, 그것도 아주 가까울 때만. 좌표를 평균으로 눌러 양 끝이 거의 안 움직인다.
+    const dx = bx - ax, dy = by - ay;
+    const tan = SNAP_DEG * Math.PI / 180;
+    if (Math.abs(dy) < Math.abs(dx) * Math.tan(tan)) {
+      const m = (ay + by) / 2; ay = by = m;
+    } else if (Math.abs(dx) < Math.abs(dy) * Math.tan(tan)) {
+      const m = (ax + bx) / 2; ax = bx = m;
     }
+    const L = Math.hypot(bx - ax, by - ay);
     const N = Math.max(2, Math.min(64, Math.round(L * k / 6)));
     for (let i = 0; i <= N; i++) push(ax + (bx - ax) * i / N, ay + (by - ay) * i / N);
   } else if (sh.kind === 'ellipse') {

@@ -361,7 +361,27 @@ const p = new Quire();
   {
     const p0=v.cur.pts, n=p0.length/3;
     const ang = Math.atan2(p0[(n-1)*3+1]-p0[1], p0[(n-1)*3]-p0[0]) * 180/Math.PI;
-    ok(Math.abs(ang - 45) < 0.5, '45도에 붙는다 (실측 ' + ang.toFixed(1) + '도)');
+    ok(Math.abs(ang - 45) > 0.2, '45도로 억지로 안 돌린다 (실측 ' + ang.toFixed(1) + '도)');
+  }
+
+  // 거의 수평인 선은 눌러서 맞춘다 — 돌리는 게 아니라 y 를 평균으로
+  v.cur = { c:'#000', w:2, a:1, pts: mkpts(a=>{ for(let i=0;i<=20;i++) put(a, i*8, 100 + (i%3)-1); }) };
+  v.snapShape();
+  {
+    const p0=v.cur.pts, n=p0.length/3;
+    ok(v.cur.snapped === 'line', '거의 수평인 것도 직선으로 봄');
+    ok(Math.abs(p0[1] - p0[(n-1)*3+1]) < 0.01, '수평으로 눌린다');
+    ok(Math.abs(p0[1] - 100) < 2, '양 끝이 원래 자리 근처에 남는다 (y=' + p0[1].toFixed(1) + ')');
+  }
+
+  // 기울기가 뜻을 가지는 선은 그대로 — 30도가 45도로 가면 안 된다
+  v.cur = { c:'#000', w:2, a:1, pts: mkpts(a=>{
+    for(let i=0;i<=20;i++) put(a, i*10, i*10*Math.tan(30*Math.PI/180) + (i%3)-1); }) };
+  v.snapShape();
+  {
+    const p0=v.cur.pts, n=p0.length/3;
+    const ang = Math.atan2(p0[(n-1)*3+1]-p0[1], p0[(n-1)*3]-p0[0]) * 180/Math.PI;
+    ok(Math.abs(ang - 30) < 2, '30도 선이 30도로 남는다 (실측 ' + ang.toFixed(1) + '도)');
   }
 
   // 동그라미 → 원

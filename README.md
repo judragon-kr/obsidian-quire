@@ -40,11 +40,16 @@ Toolbar **📐**. Draw a line or a shape, then **pause without lifting the pen**
 600 ms it straightens.
 
 ```
-line      snaps to 0° / 45° / 90° when within 7°
+line      straightened as drawn; only near-horizontal and near-vertical snap
 circle    from anything roughly round
 rectangle from four corners, axis-aligned
 triangle  from three corners
 ```
+
+**Angles are left alone.** An early version snapped to 45° steps and that is wrong for
+maths — a slope carries meaning, and turning 43° into 45° draws a different claim.
+Horizontal and vertical do snap, within 4°, because axes are common; they snap by
+averaging the coordinate rather than rotating, so both ends stay where you put them.
 
 **If it cannot tell what you drew it leaves the stroke alone.** Turning handwriting into a
 shape is not something you can undo by eye, so the detector refuses rather than guesses:
